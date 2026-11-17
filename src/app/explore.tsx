@@ -10,193 +10,189 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Categories, Fonts, getCategoryMeta, Palette } from '@/constants/theme';
+import {
+  Categories,
+  Fonts,
+  getCategoryMeta,
+  getPriorityMeta,
+  TodoistColors,
+} from '@/constants/theme';
 import { useTasks } from '@/context/tasks-context';
 import { computeLiveElapsedSeconds } from '@/services/database';
 import {
   formatClockTime,
   formatDurationClock,
   formatHumanDuration,
-  formatShortDate,
+  getDayOffsetFromToday,
 } from '@/utils/time';
 
-export default function ExploreScreen() {
+export default function ActivityLogScreen() {
   const { tasks, nowMs, resetOnboarding } = useTasks();
 
-  const analytics = useMemo(() => {
-    const completed = tasks.filter((t) => t.status === 'completed');
-    const inProgress = tasks.filter(
-      (t) => t.status === 'in_progress' || t.status === 'paused'
-    );
-    const scheduled = tasks.filter((t) => t.status === 'scheduled');
+  const records = useMemo(() => {
+    const doneToday = tasks.filter((t) => {
+      if (t.status !== 'completed') return false;
+      const offset = getDayOffsetFromToday(
+        t.completedAt ?? t.scheduledStartAt,
+        nowMs
+      );
+      return offset === 0;
+    });
 
-    const totalSeconds = tasks.reduce(
+    const todoToday = tasks.filter(
+      (t) =>
+        t.status !== 'completed' &&
+        getDayOffsetFromToday(t.scheduledStartAt, nowMs) <= 0
+    );
+
+    const todoTomorrow = tasks.filter(
+      (t) =>
+        t.status !== 'completed' &&
+        getDayOffsetFromToday(t.scheduledStartAt, nowMs) === 1
+    );
+
+    const todoNextTomorrow = tasks.filter(
+      (t) =>
+        t.status !== 'completed' &&
+        getDayOffsetFromToday(t.scheduledStartAt, nowMs) === 2
+    );
+
+    const totalTrackedSec = tasks.reduce(
       (sum, t) => sum + computeLiveElapsedSeconds(t, nowMs),
       0
     );
 
-    const byCategory = Categories.map((cat) => {
+    const byProject = Categories.map((cat) => {
       const catTasks = tasks.filter((t) => t.category === cat.id);
+      const doneCount = catTasks.filter((t) => t.status === 'completed').length;
       const seconds = catTasks.reduce(
         (sum, t) => sum + computeLiveElapsedSeconds(t, nowMs),
         0
       );
       return {
         ...cat,
-        count: catTasks.length,
+        totalCount: catTasks.length,
+        doneCount,
         seconds,
       };
     });
 
-    // Count scheduled push notifications currently armed
-    const armedNotificationsCount = scheduled.reduce((count, t) => {
-      const startMs = new Date(t.scheduledStartAt).getTime();
-      let c = 0;
-      if (startMs - 30 * 60 * 1000 > nowMs) c++;
-      if (startMs - 15 * 60 * 1000 > nowMs) c++;
-      if (startMs > nowMs) c++;
-      if (t.deadlineAt && new Date(t.deadlineAt).getTime() > nowMs) c++;
-      return count + c;
-    }, 0);
-
     return {
-      completed,
-      inProgress,
-      scheduled,
-      totalSeconds,
-      byCategory,
-      armedNotificationsCount,
+      doneToday,
+      todoToday,
+      todoTomorrow,
+      todoNextTomorrow,
+      totalTrackedSec,
+      byProject,
     };
   }, [tasks, nowMs]);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      {/* Top Todoist Activity Header */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.pageTitle}>Activity & Records</Text>
+          <Text style={styles.subtitle}>
+            Local SQLite Ledger · Stored on your phone
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={async () => {
+            await resetOnboarding();
+            router.push('/onboarding');
+          }}
+          style={styles.introBtn}
+        >
+          <Ionicons
+            name="sparkles-outline"
+            size={14}
+            color={TodoistColors.red}
+          />
+          <Text style={styles.introBtnText}>Intro</Text>
+        </Pressable>
+      </View>
+
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.eyebrow}>ON-DEVICE SQLITE STORAGE</Text>
-            <Text style={styles.title}>Activity Ledger</Text>
+        {/* Karma / Productivity Summary Strip */}
+        <View style={styles.summaryRow}>
+          <View style={styles.statBox}>
+            <Text style={[styles.statNumber, { color: TodoistColors.dateToday }]}>
+              {records.doneToday.length}
+            </Text>
+            <Text style={styles.statLabel}>DONE TODAY</Text>
           </View>
 
-          <Pressable
-            onPress={async () => {
-              await resetOnboarding();
-              router.push('/onboarding');
-            }}
-            style={styles.replayBtn}
-          >
-            <Ionicons name="book-outline" size={14} color={Palette.ink} />
-            <Text style={styles.replayBtnText}>View Intro</Text>
-          </Pressable>
+          <View style={styles.statBox}>
+            <Text
+              style={[styles.statNumber, { color: TodoistColors.dateTomorrow }]}
+            >
+              {records.todoTomorrow.length}
+            </Text>
+            <Text style={styles.statLabel}>DO TOMORROW</Text>
+          </View>
+
+          <View style={styles.statBox}>
+            <Text style={[styles.statNumber, { color: TodoistColors.red }]}>
+              {formatDurationClock(records.totalTrackedSec)}
+            </Text>
+            <Text style={styles.statLabel}>TRACKED TIME</Text>
+          </View>
         </View>
 
-        {/* Storage & Notification Engine Status Card */}
-        <View style={styles.engineCard}>
-          <View style={styles.engineTopRow}>
-            <View style={styles.engineBadge}>
+        {/* 1. What You Have Done Today */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleRow}>
               <Ionicons
-                name="shield-checkmark"
-                size={14}
-                color={Palette.forest}
+                name="checkmark-done-circle"
+                size={18}
+                color={TodoistColors.dateToday}
               />
-              <Text style={styles.engineBadgeText}>
-                LOCAL DEVICE DATABASE ACTIVE
-              </Text>
+              <Text style={styles.cardTitle}>What You Have Done Today</Text>
             </View>
-            <Text style={styles.engineTableCount}>{tasks.length} rows</Text>
+            <Text style={styles.cardCountBadge}>
+              {records.doneToday.length} completed
+            </Text>
           </View>
 
-          <Text style={styles.engineCopy}>
-            All tasks, elapsed session timers, and notification IDs are saved in{' '}
-            <Text style={styles.monoInline}>cadence_tasks.db</Text> on your
-            phone—zero external cloud dependency, ready for future device-switch
-            export.
-          </Text>
-
-          <View style={styles.engineStatsRow}>
-            <View style={styles.engineStatItem}>
-              <Text style={styles.engineStatNumber}>
-                {formatDurationClock(analytics.totalSeconds)}
-              </Text>
-              <Text style={styles.engineStatLabel}>TOTAL TRACKED</Text>
-            </View>
-
-            <View style={styles.engineDivider} />
-
-            <View style={styles.engineStatItem}>
-              <Text style={styles.engineStatNumber}>
-                {analytics.armedNotificationsCount}
-              </Text>
-              <Text style={styles.engineStatLabel}>ARMED ALERTS</Text>
-            </View>
-
-            <View style={styles.engineDivider} />
-
-            <View style={styles.engineStatItem}>
-              <Text style={styles.engineStatNumber}>
-                {analytics.completed.length}
-              </Text>
-              <Text style={styles.engineStatLabel}>FINISHED TASKS</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Category Time Breakdown */}
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>EFFORT BY CATEGORY</Text>
-          {analytics.byCategory.map((cat) => (
-            <View key={cat.id} style={styles.catRow}>
-              <View style={styles.catLeft}>
-                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}>
-                  <Ionicons name={cat.icon} size={15} color={cat.color} />
-                </View>
-                <View>
-                  <Text style={styles.catName}>{cat.label}</Text>
-                  <Text style={styles.catCount}>
-                    {cat.count} {cat.count === 1 ? 'task' : 'tasks'}
-                  </Text>
-                </View>
-              </View>
-
-              <Text style={styles.catDuration}>
-                {formatHumanDuration(cat.seconds)}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Completed Sessions History */}
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>COMPLETED TASK LOG</Text>
-          {analytics.completed.length === 0 ? (
-            <Text style={styles.emptyLogText}>
-              Complete an active task to see its timestamped audit log here.
+          {records.doneToday.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No tasks marked complete today yet. Start and complete a task to
+              record it in your daily log.
             </Text>
           ) : (
-            analytics.completed.map((task) => {
+            records.doneToday.map((task) => {
               const cat = getCategoryMeta(task.category);
               return (
                 <Pressable
                   key={task.id}
                   onPress={() => router.push(`/task/${task.id}`)}
-                  style={styles.logRow}
+                  style={styles.recordRow}
                 >
+                  <View style={styles.checkGreenCircle}>
+                    <Ionicons
+                      name="checkmark"
+                      size={12}
+                      color={TodoistColors.white}
+                    />
+                  </View>
+
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.logTitle}>{task.title}</Text>
-                    <Text style={styles.logMeta}>
-                      {cat.label} · Finished{' '}
-                      {formatShortDate(task.completedAt)}{' '}
+                    <Text style={styles.recordTitle}>{task.title}</Text>
+                    <Text style={styles.recordMeta}>
+                      #{cat.label} · Completed at{' '}
                       {formatClockTime(task.completedAt)}
                     </Text>
                   </View>
 
-                  <View style={styles.logTimePill}>
-                    <Text style={styles.logTimeText}>
+                  <View style={styles.durationBadge}>
+                    <Text style={styles.durationBadgeText}>
                       {formatHumanDuration(task.accumulatedSeconds || 0)}
                     </Text>
                   </View>
@@ -204,6 +200,128 @@ export default function ExploreScreen() {
               );
             })
           )}
+        </View>
+
+        {/* 2. What You Do Tomorrow & Next Tomorrow */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons
+                name="sunny"
+                size={17}
+                color={TodoistColors.dateTomorrow}
+              />
+              <Text style={styles.cardTitle}>What You Do Tomorrow</Text>
+            </View>
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: '/new-task',
+                  params: { preset: 'tomorrow' },
+                })
+              }
+            >
+              <Text style={styles.addSmallLink}>+ Plan Tomorrow</Text>
+            </Pressable>
+          </View>
+
+          {records.todoTomorrow.length === 0 ? (
+            <Text style={styles.emptyText}>
+              Nothing scheduled for tomorrow yet. Tap &quot;+ Plan Tomorrow&quot; to
+              schedule tasks ahead.
+            </Text>
+          ) : (
+            records.todoTomorrow.map((task) => {
+              const cat = getCategoryMeta(task.category);
+              const prio = getPriorityMeta(task.priority);
+              return (
+                <Pressable
+                  key={task.id}
+                  onPress={() => router.push(`/task/${task.id}`)}
+                  style={styles.recordRow}
+                >
+                  <View
+                    style={[
+                      styles.prioRing,
+                      { borderColor: prio.color, backgroundColor: prio.fill },
+                    ]}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.recordTitle}>{task.title}</Text>
+                    <Text style={styles.recordMeta}>
+                      #{cat.label} · Starts{' '}
+                      {formatClockTime(task.scheduledStartAt)} (30m/15m/0m alerts
+                      armed)
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })
+          )}
+
+          {/* Next Tomorrow Subsection */}
+          {records.todoNextTomorrow.length > 0 ? (
+            <View style={styles.subSection}>
+              <Text style={styles.subSectionHeader}>
+                NEXT TOMORROW (+2 DAYS)
+              </Text>
+              {records.todoNextTomorrow.map((task) => {
+                const cat = getCategoryMeta(task.category);
+                const prio = getPriorityMeta(task.priority);
+                return (
+                  <Pressable
+                    key={task.id}
+                    onPress={() => router.push(`/task/${task.id}`)}
+                    style={styles.recordRow}
+                  >
+                    <View
+                      style={[
+                        styles.prioRing,
+                        { borderColor: prio.color, backgroundColor: prio.fill },
+                      ]}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.recordTitle}>{task.title}</Text>
+                      <Text style={styles.recordMeta}>
+                        #{cat.label} · Starts{' '}
+                        {formatClockTime(task.scheduledStartAt)}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
+
+        {/* 3. Project Breakdown & Local SQLite Status */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons
+                name="folder-open-outline"
+                size={17}
+                color={TodoistColors.p3}
+              />
+              <Text style={styles.cardTitle}>Projects & Tracked Time</Text>
+            </View>
+            <Text style={styles.cardCountBadge}>{tasks.length} SQLite rows</Text>
+          </View>
+
+          {records.byProject.map((proj) => (
+            <View key={proj.id} style={styles.projectRow}>
+              <View style={styles.projectLeft}>
+                <Text style={[styles.projectHash, { color: proj.color }]}>#</Text>
+                <Text style={styles.projectName}>{proj.label}</Text>
+                <Text style={styles.projectCount}>
+                  ({proj.doneCount}/{proj.totalCount} done)
+                </Text>
+              </View>
+              <Text style={styles.projectTime}>
+                {formatHumanDuration(proj.seconds)}
+              </Text>
+            </View>
+          ))}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -213,200 +331,197 @@ export default function ExploreScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: Palette.paper,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 110,
-    gap: 18,
+    backgroundColor: TodoistColors.bg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TodoistColors.border,
   },
-  eyebrow: {
-    color: Palette.vermilion,
-    fontFamily: Fonts?.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  title: {
-    color: Palette.ink,
-    fontSize: 28,
+  pageTitle: {
+    color: TodoistColors.text,
+    fontSize: 26,
     fontWeight: '800',
-    letterSpacing: -0.7,
+    letterSpacing: -0.5,
+  },
+  subtitle: {
+    color: TodoistColors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
     marginTop: 2,
   },
-  replayBtn: {
+  introBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: Palette.paperElevated,
-    borderWidth: 1,
-    borderColor: Palette.border,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 11,
+    gap: 5,
+    backgroundColor: TodoistColors.redSoft,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
-  replayBtnText: {
-    color: Palette.ink,
+  introBtnText: {
+    color: TodoistColors.red,
     fontSize: 12,
     fontWeight: '700',
   },
-  engineCard: {
-    backgroundColor: Palette.ink,
-    borderRadius: 20,
-    padding: 18,
-    gap: 12,
+  scrollContent: {
+    padding: 16,
+    gap: 14,
+    paddingBottom: 120,
   },
-  engineTopRow: {
+  summaryRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 8,
   },
-  engineBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#23221E',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-  },
-  engineBadgeText: {
-    color: Palette.paper,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.7,
-  },
-  engineTableCount: {
-    color: Palette.inkFaint,
-    fontFamily: Fonts?.mono,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  engineCopy: {
-    color: Palette.inkFaint,
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  monoInline: {
-    color: Palette.paper,
-    fontFamily: Fonts?.mono,
-    fontWeight: '700',
-  },
-  engineStatsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#2B2A26',
-  },
-  engineStatItem: {
+  statBox: {
     flex: 1,
+    backgroundColor: TodoistColors.bgSecondary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: TodoistColors.border,
     alignItems: 'center',
   },
-  engineDivider: {
-    width: 1,
-    height: 26,
-    backgroundColor: '#2B2A26',
-  },
-  engineStatNumber: {
-    color: Palette.white,
+  statNumber: {
     fontFamily: Fonts?.mono,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '800',
   },
-  engineStatLabel: {
-    color: Palette.inkFaint,
+  statLabel: {
+    color: TodoistColors.textMuted,
     fontSize: 9,
     fontWeight: '700',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
     marginTop: 3,
   },
-  sectionCard: {
-    backgroundColor: Palette.paperElevated,
-    borderRadius: 18,
-    padding: 16,
+  card: {
+    backgroundColor: TodoistColors.bg,
+    borderRadius: 14,
+    padding: 14,
     borderWidth: 1,
-    borderColor: Palette.border,
-    gap: 12,
+    borderColor: TodoistColors.border,
+    gap: 10,
   },
-  sectionTitle: {
-    color: Palette.inkMuted,
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.9,
-  },
-  catRow: {
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TodoistColors.border,
   },
-  catLeft: {
+  cardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 7,
   },
-  catIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  catName: {
-    color: Palette.ink,
+  cardTitle: {
+    color: TodoistColors.text,
     fontSize: 14,
     fontWeight: '700',
   },
-  catCount: {
-    color: Palette.inkMuted,
-    fontSize: 12,
+  cardCountBadge: {
+    color: TodoistColors.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
   },
-  catDuration: {
-    color: Palette.ink,
-    fontFamily: Fonts?.mono,
-    fontSize: 13,
+  addSmallLink: {
+    color: TodoistColors.red,
+    fontSize: 12,
     fontWeight: '700',
   },
-  emptyLogText: {
-    color: Palette.inkMuted,
+  emptyText: {
+    color: TodoistColors.textMuted,
     fontSize: 13,
     lineHeight: 18,
   },
-  logRow: {
+  recordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 6,
+  },
+  checkGreenCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: TodoistColors.dateToday,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  prioRing: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+  },
+  recordTitle: {
+    color: TodoistColors.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  recordMeta: {
+    color: TodoistColors.textSecondary,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  durationBadge: {
+    backgroundColor: TodoistColors.dateTodayBg,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  durationBadgeText: {
+    color: TodoistColors.dateToday,
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  subSection: {
+    marginTop: 6,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: TodoistColors.border,
+    gap: 6,
+  },
+  subSectionHeader: {
+    color: TodoistColors.dateUpcoming,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  projectRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: Palette.border,
-  },
-  logTitle: {
-    color: Palette.ink,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  logMeta: {
-    color: Palette.inkMuted,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  logTimePill: {
-    backgroundColor: Palette.forestSoft,
-    paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 8,
   },
-  logTimeText: {
-    color: Palette.forest,
+  projectLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  projectHash: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  projectName: {
+    color: TodoistColors.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  projectCount: {
+    color: TodoistColors.textMuted,
+    fontSize: 12,
+  },
+  projectTime: {
+    color: TodoistColors.text,
     fontFamily: Fonts?.mono,
     fontSize: 12,
     fontWeight: '700',

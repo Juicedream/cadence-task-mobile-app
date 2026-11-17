@@ -3,7 +3,12 @@ import { router } from 'expo-router';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Fonts, getCategoryMeta, Palette } from '@/constants/theme';
+import {
+  Fonts,
+  getCategoryMeta,
+  getPriorityMeta,
+  TodoistColors,
+} from '@/constants/theme';
 import { useTasks } from '@/context/tasks-context';
 import { computeLiveElapsedSeconds, type TaskRecord } from '@/services/database';
 import {
@@ -12,14 +17,27 @@ import {
   formatHumanDuration,
   formatShortDate,
   getTaskCadenceMeta,
+  getTodoistDateChipColor,
 } from '@/utils/time';
 
-export function TaskTimelineCard({ task }: { task: TaskRecord }) {
+export function TaskTimelineCard({
+  task,
+  showDateLabel = true,
+}: {
+  task: TaskRecord;
+  showDateLabel?: boolean;
+}) {
   const { nowMs, startTaskNow, resumeTask, completeTask } = useTasks();
   const category = getCategoryMeta(task.category);
+  const priority = getPriorityMeta(task.priority);
   const cadence = getTaskCadenceMeta(
     task.scheduledStartAt,
     task.deadlineAt,
+    task.status,
+    nowMs
+  );
+  const dateChip = getTodoistDateChipColor(
+    task.scheduledStartAt,
     task.status,
     nowMs
   );
@@ -29,7 +47,6 @@ export function TaskTimelineCard({ task }: { task: TaskRecord }) {
   const isInProgress = task.status === 'in_progress';
   const isPaused = task.status === 'paused';
 
-  // Evaluate which of the 3 notification checkpoints have passed or are active
   const startMs = new Date(task.scheduledStartAt).getTime();
   const passed30m = nowMs >= startMs - 30 * 60 * 1000;
   const passed15m = nowMs >= startMs - 15 * 60 * 1000;
@@ -39,261 +56,199 @@ export function TaskTimelineCard({ task }: { task: TaskRecord }) {
     <Pressable
       onPress={() => router.push(`/task/${task.id}`)}
       style={({ pressed }) => [
-        styles.card,
-        isInProgress && styles.cardActive,
-        isCompleted && styles.cardCompleted,
-        pressed && { opacity: 0.92 },
+        styles.rowContainer,
+        isInProgress && styles.rowContainerActive,
+        pressed && { backgroundColor: TodoistColors.bgSecondary },
       ]}
     >
-      {/* Top Meta Row: Time Block + Status Badge */}
-      <View style={styles.topRow}>
-        <View style={styles.timeCluster}>
-          <Text style={styles.startTimeText}>
-            {formatClockTime(task.scheduledStartAt)}
-          </Text>
-          {task.deadlineAt ? (
-            <Text style={styles.deadlineTimeText}>
-              → {formatClockTime(task.deadlineAt)}
-            </Text>
-          ) : null}
-          <Text style={styles.dateLabel}>
-            · {formatShortDate(task.scheduledStartAt)}
-          </Text>
-        </View>
-
+      {/* Left Column: Authentic Todoist Priority Circle Checkbox */}
+      <Pressable
+        onPress={(e) => {
+          e.stopPropagation();
+          if (!isCompleted) {
+            completeTask(task.id);
+          } else {
+            startTaskNow(task.id);
+          }
+        }}
+        hitSlop={10}
+        style={styles.checkboxHitArea}
+      >
         <View
           style={[
-            styles.phaseBadge,
-            cadence.isUrgent && !isCompleted && styles.phaseBadgeUrgent,
-            isCompleted && styles.phaseBadgeCompleted,
+            styles.priorityCircle,
+            {
+              borderColor: isCompleted
+                ? TodoistColors.textMuted
+                : priority.color,
+              backgroundColor: isCompleted
+                ? TodoistColors.textMuted
+                : priority.fill,
+            },
           ]}
         >
-          <Text
-            style={[
-              styles.phaseBadgeText,
-              cadence.isUrgent && !isCompleted && styles.phaseBadgeTextUrgent,
-              isCompleted && styles.phaseBadgeTextCompleted,
-            ]}
-          >
-            {cadence.badgeLabel}
-          </Text>
+          {isCompleted ? (
+            <Ionicons name="checkmark" size={14} color={TodoistColors.white} />
+          ) : isInProgress ? (
+            <View
+              style={[
+                styles.activeInnerDot,
+                { backgroundColor: priority.color },
+              ]}
+            />
+          ) : null}
         </View>
-      </View>
+      </Pressable>
 
-      {/* Main Title & Category */}
-      <View style={styles.bodyRow}>
-        <View style={{ flex: 1 }}>
-          <View style={styles.categoryRow}>
-            <View style={[styles.categoryPill, { backgroundColor: category.bg }]}>
-              <Ionicons name={category.icon} size={12} color={category.color} />
-              <Text style={[styles.categoryText, { color: category.color }]}>
-                {category.label}
-              </Text>
-            </View>
-            <Text style={styles.countdownSubtext}>{cadence.countdownText}</Text>
-          </View>
-
+      {/* Center Column: Task Title, Notes, Todoist Metadata Chips & 30m/15m/0m Alert Strip */}
+      <View style={styles.contentCol}>
+        <View style={styles.titleRow}>
           <Text
             style={[styles.title, isCompleted && styles.titleCompleted]}
             numberOfLines={2}
           >
             {task.title}
           </Text>
+        </View>
 
-          {task.notes ? (
-            <Text style={styles.notes} numberOfLines={2}>
-              {task.notes}
+        {task.notes ? (
+          <Text style={styles.notes} numberOfLines={1}>
+            {task.notes}
+          </Text>
+        ) : null}
+
+        {/* Todoist Metadata Chips Row: Date + Time + Deadline + Push Cadence + #Project */}
+        <View style={styles.metaRow}>
+          {/* Date & Time Chip */}
+          <View style={styles.dateChip}>
+            <Ionicons name={dateChip.icon} size={12} color={dateChip.text} />
+            <Text style={[styles.dateChipText, { color: dateChip.text }]}>
+              {showDateLabel
+                ? `${formatShortDate(task.scheduledStartAt, nowMs)} `
+                : ''}
+              {formatClockTime(task.scheduledStartAt)}
+              {task.deadlineAt ? ` – ${formatClockTime(task.deadlineAt)}` : ''}
             </Text>
-          ) : null}
-        </View>
-      </View>
-
-      {/* 30m → 15m → Start Notification Cadence Rail */}
-      {!isCompleted ? (
-        <View style={styles.cadenceRail}>
-          <View style={styles.railLabelRow}>
-            <Ionicons
-              name="notifications-outline"
-              size={13}
-              color={Palette.inkMuted}
-            />
-            <Text style={styles.railTitle}>Alert Cadence</Text>
           </View>
 
-          <View style={styles.stepsRow}>
+          {/* 30m · 15m · 0m Push Cadence Mini Indicator */}
+          {!isCompleted ? (
             <View
               style={[
-                styles.stepChip,
-                passed30m && styles.stepChipTriggered,
-                cadence.phase === 'window_30m' && styles.stepChipCurrent,
+                styles.cadenceChip,
+                cadence.isUrgent && styles.cadenceChipUrgent,
               ]}
             >
-              <View
-                style={[
-                  styles.stepDot,
-                  passed30m && styles.stepDotTriggered,
-                ]}
-              />
-              <Text
-                style={[
-                  styles.stepText,
-                  passed30m && styles.stepTextTriggered,
-                ]}
-              >
-                -30m Prep
-              </Text>
-            </View>
-
-            <View style={styles.stepConnector} />
-
-            <View
-              style={[
-                styles.stepChip,
-                passed15m && styles.stepChipTriggered,
-                cadence.phase === 'window_15m' && styles.stepChipCurrent,
-              ]}
-            >
-              <View
-                style={[
-                  styles.stepDot,
-                  passed15m && styles.stepDotTriggered,
-                ]}
-              />
-              <Text
-                style={[
-                  styles.stepText,
-                  passed15m && styles.stepTextTriggered,
-                ]}
-              >
-                -15m Alert
-              </Text>
-            </View>
-
-            <View style={styles.stepConnector} />
-
-            <View
-              style={[
-                styles.stepChip,
-                passed0m && styles.stepChipTriggered,
-                (cadence.phase === 'starting_now' ||
-                  cadence.phase === 'overdue_start') &&
-                  styles.stepChipCurrent,
-              ]}
-            >
-              <View
-                style={[
-                  styles.stepDot,
-                  passed0m && styles.stepDotTriggered,
-                ]}
-              />
-              <Text
-                style={[
-                  styles.stepText,
-                  passed0m && styles.stepTextTriggered,
-                ]}
-              >
-                Start Now
-              </Text>
-            </View>
-          </View>
-        </View>
-      ) : null}
-
-      {/* Footer Action Bar */}
-      <View style={styles.footerRow}>
-        {task.status === 'scheduled' ? (
-          <>
-            <View style={styles.metaHint}>
-              <Ionicons name="time-outline" size={14} color={Palette.inkMuted} />
-              <Text style={styles.metaHintText}>
-                Ready when you are
-              </Text>
-            </View>
-
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                startTaskNow(task.id);
-              }}
-              style={({ pressed }) => [
-                styles.startBtn,
-                cadence.isUrgent && styles.startBtnUrgent,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="play" size={14} color={Palette.white} />
-              <Text style={styles.startBtnText}>Starting Now</Text>
-            </Pressable>
-          </>
-        ) : null}
-
-        {isInProgress ? (
-          <>
-            <View style={styles.liveElapsedPill}>
-              <View style={styles.liveRedDot} />
-              <Text style={styles.liveElapsedText}>
-                Tracking · {formatDurationClock(elapsedSec)}
-              </Text>
-            </View>
-
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                completeTask(task.id);
-              }}
-              style={({ pressed }) => [
-                styles.doneSmallBtn,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="checkmark" size={15} color={Palette.white} />
-              <Text style={styles.startBtnText}>Mark Done</Text>
-            </Pressable>
-          </>
-        ) : null}
-
-        {isPaused ? (
-          <>
-            <View style={styles.metaHint}>
-              <Ionicons name="pause-circle-outline" size={15} color={Palette.amber} />
-              <Text style={[styles.metaHintText, { color: Palette.amber }]}>
-                Paused at {formatDurationClock(elapsedSec)}
-              </Text>
-            </View>
-
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                resumeTask(task.id);
-              }}
-              style={({ pressed }) => [
-                styles.startBtn,
-                { backgroundColor: Palette.amber },
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="play" size={14} color={Palette.white} />
-              <Text style={styles.startBtnText}>Resume</Text>
-            </Pressable>
-          </>
-        ) : null}
-
-        {isCompleted ? (
-          <View style={styles.completedFooter}>
-            <View style={styles.completedStat}>
               <Ionicons
-                name="checkmark-done-circle"
-                size={16}
-                color={Palette.forest}
+                name="notifications-outline"
+                size={11}
+                color={
+                  cadence.isUrgent
+                    ? TodoistColors.red
+                    : TodoistColors.textSecondary
+                }
               />
-              <Text style={styles.completedStatText}>
+              <Text
+                style={[
+                  styles.cadenceStepText,
+                  passed30m && styles.cadenceStepFired,
+                ]}
+              >
+                30m
+              </Text>
+              <Text style={styles.cadenceDotSep}>·</Text>
+              <Text
+                style={[
+                  styles.cadenceStepText,
+                  passed15m && styles.cadenceStepFired,
+                ]}
+              >
+                15m
+              </Text>
+              <Text style={styles.cadenceDotSep}>·</Text>
+              <Text
+                style={[
+                  styles.cadenceStepText,
+                  passed0m && styles.cadenceStepFired,
+                ]}
+              >
+                0m
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.loggedChip}>
+              <Ionicons
+                name="stopwatch-outline"
+                size={12}
+                color={TodoistColors.dateToday}
+              />
+              <Text style={styles.loggedChipText}>
                 Tracked {formatHumanDuration(task.accumulatedSeconds || 0)}
               </Text>
             </View>
-            {task.completedAt ? (
-              <Text style={styles.completedTimeText}>
-                Finished {formatClockTime(task.completedAt)}
-              </Text>
+          )}
+
+          {/* #Project Label (Right-aligned Todoist style) */}
+          <View style={styles.projectTag}>
+            <Text style={styles.projectHash}>#</Text>
+            <Text style={styles.projectLabelText}>{category.label}</Text>
+            <View
+              style={[styles.projectColorDot, { backgroundColor: category.color }]}
+            />
+          </View>
+        </View>
+
+        {/* Bottom Action Strip for Starting Now / Active Tracking */}
+        {!isCompleted ? (
+          <View style={styles.actionRow}>
+            <Text
+              style={[
+                styles.countdownHint,
+                cadence.isUrgent && { color: TodoistColors.red, fontWeight: '700' },
+              ]}
+            >
+              {cadence.countdownText}
+            </Text>
+
+            {task.status === 'scheduled' ? (
+              <Pressable
+                onPress={(e) => {
+                  e.stopPropagation();
+                  startTaskNow(task.id);
+                }}
+                style={({ pressed }) => [
+                  styles.startPillBtn,
+                  cadence.isUrgent && styles.startPillBtnUrgent,
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons name="play" size={11} color={TodoistColors.white} />
+                <Text style={styles.startPillBtnText}>Start Now</Text>
+              </Pressable>
+            ) : null}
+
+            {isInProgress ? (
+              <View style={styles.liveTrackingBadge}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveTrackingText}>
+                  {formatDurationClock(elapsedSec)}
+                </Text>
+              </View>
+            ) : null}
+
+            {isPaused ? (
+              <Pressable
+                onPress={(e) => {
+                  e.stopPropagation();
+                  resumeTask(task.id);
+                }}
+                style={styles.pausedPillBtn}
+              >
+                <Ionicons name="play" size={11} color={TodoistColors.p2} />
+                <Text style={styles.pausedPillText}>
+                  Resume ({formatDurationClock(elapsedSec)})
+                </Text>
+              </Pressable>
             ) : null}
           </View>
         ) : null}
@@ -303,277 +258,201 @@ export function TaskTimelineCard({ task }: { task: TaskRecord }) {
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: Palette.paperElevated,
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: Palette.border,
+  rowContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    backgroundColor: TodoistColors.bg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TodoistColors.border,
     gap: 12,
   },
-  cardActive: {
-    borderColor: Palette.vermilion,
-    borderWidth: 1.5,
-    backgroundColor: '#FFFDFB',
+  rowContainerActive: {
+    backgroundColor: '#FFF8F7',
   },
-  cardCompleted: {
-    backgroundColor: Palette.paperSubtle,
-    borderColor: Palette.border,
-    opacity: 0.88,
+  checkboxHitArea: {
+    paddingTop: 2,
   },
-  topRow: {
-    flexDirection: 'row',
+  priorityCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeInnerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  contentCol: {
+    flex: 1,
+    gap: 4,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 8,
   },
-  timeCluster: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 5,
-    flexShrink: 1,
-  },
-  startTimeText: {
-    color: Palette.ink,
-    fontFamily: Fonts?.mono,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  deadlineTimeText: {
-    color: Palette.inkMuted,
-    fontFamily: Fonts?.mono,
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  dateLabel: {
-    color: Palette.inkFaint,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  phaseBadge: {
-    backgroundColor: Palette.paperSubtle,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: Palette.border,
-  },
-  phaseBadgeUrgent: {
-    backgroundColor: Palette.vermilionSoft,
-    borderColor: Palette.vermilionBorder,
-  },
-  phaseBadgeCompleted: {
-    backgroundColor: Palette.forestSoft,
-    borderColor: Palette.forestBorder,
-  },
-  phaseBadgeText: {
-    color: Palette.inkMuted,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.7,
-  },
-  phaseBadgeTextUrgent: {
-    color: Palette.vermilion,
-  },
-  phaseBadgeTextCompleted: {
-    color: Palette.forest,
-  },
-  bodyRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  categoryPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  categoryText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  countdownSubtext: {
-    color: Palette.inkMuted,
-    fontFamily: Fonts?.mono,
-    fontSize: 11,
-    fontWeight: '600',
-  },
   title: {
-    color: Palette.ink,
-    fontSize: 17,
-    fontWeight: '700',
-    lineHeight: 22,
-    letterSpacing: -0.2,
+    flex: 1,
+    color: TodoistColors.text,
+    fontSize: 15,
+    fontWeight: '500',
+    lineHeight: 20,
   },
   titleCompleted: {
     textDecorationLine: 'line-through',
-    color: Palette.inkMuted,
+    color: TodoistColors.textMuted,
   },
   notes: {
-    color: Palette.inkMuted,
+    color: TodoistColors.textSecondary,
     fontSize: 13,
-    lineHeight: 18,
-    marginTop: 4,
+    lineHeight: 17,
   },
-  cadenceRail: {
-    backgroundColor: Palette.paper,
-    borderRadius: 12,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: Palette.border,
-    gap: 7,
-  },
-  railLabelRow: {
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 3,
   },
-  railTitle: {
-    color: Palette.inkMuted,
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-  stepsRow: {
+  dateChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 4,
   },
-  stepChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: Palette.paperElevated,
-    borderWidth: 1,
-    borderColor: Palette.border,
-  },
-  stepChipTriggered: {
-    backgroundColor: Palette.amberSoft,
-    borderColor: Palette.amberBorder,
-  },
-  stepChipCurrent: {
-    backgroundColor: Palette.vermilionSoft,
-    borderColor: Palette.vermilion,
-  },
-  stepDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: Palette.inkFaint,
-  },
-  stepDotTriggered: {
-    backgroundColor: Palette.vermilion,
-  },
-  stepText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Palette.inkMuted,
-  },
-  stepTextTriggered: {
-    color: Palette.ink,
-    fontWeight: '700',
-  },
-  stepConnector: {
-    flex: 1,
-    height: 1,
-    backgroundColor: Palette.border,
-    marginHorizontal: 4,
-  },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 4,
-  },
-  metaHint: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  metaHintText: {
-    color: Palette.inkMuted,
+  dateChipText: {
     fontSize: 12,
     fontWeight: '500',
   },
-  startBtn: {
+  cadenceChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: Palette.ink,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 11,
+    gap: 3,
+    backgroundColor: TodoistColors.bgTertiary,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
   },
-  startBtnUrgent: {
-    backgroundColor: Palette.vermilion,
+  cadenceChipUrgent: {
+    backgroundColor: TodoistColors.redSoft,
   },
-  doneSmallBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: Palette.forest,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 11,
-  },
-  startBtnText: {
-    color: Palette.white,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  liveElapsedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    backgroundColor: Palette.vermilionSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  liveRedDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: Palette.vermilion,
-  },
-  liveElapsedText: {
-    color: Palette.vermilion,
+  cadenceStepText: {
+    fontSize: 10,
     fontFamily: Fonts?.mono,
-    fontSize: 12,
-    fontWeight: '700',
+    color: TodoistColors.textMuted,
+    fontWeight: '600',
   },
-  completedFooter: {
-    flex: 1,
+  cadenceStepFired: {
+    color: TodoistColors.red,
+    fontWeight: '800',
+  },
+  cadenceDotSep: {
+    fontSize: 10,
+    color: TodoistColors.textFaint,
+  },
+  loggedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: TodoistColors.dateTodayBg,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
+  },
+  loggedChipText: {
+    color: TodoistColors.dateToday,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  projectTag: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  projectHash: {
+    color: TodoistColors.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  projectLabelText: {
+    color: TodoistColors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  projectColorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 2,
+  },
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginTop: 4,
   },
-  completedStat: {
+  countdownHint: {
+    color: TodoistColors.textMuted,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  startPillBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
+    backgroundColor: TodoistColors.text,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
   },
-  completedStatText: {
-    color: Palette.forest,
-    fontSize: 12,
+  startPillBtnUrgent: {
+    backgroundColor: TodoistColors.red,
+  },
+  startPillBtnText: {
+    color: TodoistColors.white,
+    fontSize: 11,
     fontWeight: '700',
   },
-  completedTimeText: {
-    color: Palette.inkFaint,
-    fontSize: 12,
+  liveTrackingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: TodoistColors.redSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: TodoistColors.red,
+  },
+  liveTrackingText: {
+    color: TodoistColors.red,
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  pausedPillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: TodoistColors.p2Bg,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  pausedPillText: {
+    color: TodoistColors.p2,
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

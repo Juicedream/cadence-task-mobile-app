@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -13,55 +13,88 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Categories, type CategoryId, Fonts, Palette } from '@/constants/theme';
+import {
+  Categories,
+  type CategoryId,
+  Fonts,
+  Priorities,
+  type PriorityLevel,
+  TodoistColors,
+} from '@/constants/theme';
 import { useTasks } from '@/context/tasks-context';
-import { formatClockTime, formatShortDate } from '@/utils/time';
+import {
+  formatClockTime,
+  formatShortDate,
+  getStartOfDay,
+} from '@/utils/time';
 
-interface StartPreset {
+interface DayPreset {
   id: string;
   label: string;
   sublabel: string;
-  getStartDate: () => Date;
+  dayOffset: number;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  bg: string;
 }
 
-const START_PRESETS: StartPreset[] = [
+const DAY_PRESETS: DayPreset[] = [
   {
-    id: 'demo-1m',
-    label: 'In 1 Min',
-    sublabel: 'Fast Live Test',
-    getStartDate: () => new Date(Date.now() + 60 * 1000),
+    id: 'today',
+    label: 'Today',
+    sublabel: 'Current day',
+    dayOffset: 0,
+    icon: 'today-outline',
+    color: TodoistColors.dateToday,
+    bg: TodoistColors.dateTodayBg,
   },
   {
-    id: 'in-16m',
-    label: 'In 16 Mins',
-    sublabel: 'Triggers 15m + Start',
-    getStartDate: () => new Date(Date.now() + 16 * 60 * 1000),
+    id: 'tomorrow',
+    label: 'Tomorrow',
+    sublabel: '+1 day',
+    dayOffset: 1,
+    icon: 'sunny-outline',
+    color: TodoistColors.dateTomorrow,
+    bg: TodoistColors.dateTomorrowBg,
   },
   {
-    id: 'in-31m',
-    label: 'In 31 Mins',
-    sublabel: 'Triggers 30m + 15m + Start',
-    getStartDate: () => new Date(Date.now() + 31 * 60 * 1000),
+    id: 'next-tomorrow',
+    label: 'Next Tomorrow',
+    sublabel: '+2 days',
+    dayOffset: 2,
+    icon: 'calendar-outline',
+    color: TodoistColors.dateUpcoming,
+    bg: TodoistColors.dateUpcomingBg,
   },
   {
-    id: 'in-1h',
-    label: 'In 1 Hour',
-    sublabel: 'Full 3-Stage Cadence',
-    getStartDate: () => new Date(Date.now() + 60 * 60 * 1000),
+    id: 'in-3-days',
+    label: 'In 3 Days',
+    sublabel: '+3 days',
+    dayOffset: 3,
+    icon: 'calendar-clear-outline',
+    color: TodoistColors.p3,
+    bg: TodoistColors.p3Bg,
   },
   {
-    id: 'tonight-11pm',
-    label: '11:00 PM',
-    sublabel: 'Classic Evening Slot',
-    getStartDate: () => {
-      const d = new Date();
-      d.setHours(23, 0, 0, 0);
-      if (d.getTime() <= Date.now() + 60 * 1000) {
-        d.setDate(d.getDate() + 1);
-      }
-      return d;
-    },
+    id: 'next-week',
+    label: 'Next Week',
+    sublabel: '+7 days',
+    dayOffset: 7,
+    icon: 'arrow-forward-circle-outline',
+    color: TodoistColors.textSecondary,
+    bg: TodoistColors.bgTertiary,
   },
+];
+
+const TIME_SLOTS = [
+  { id: 'in-1m', label: 'In 1m (Test)', minutesFromNow: 1 },
+  { id: 'in-16m', label: 'In 16m', minutesFromNow: 16 },
+  { id: 'in-31m', label: 'In 31m', minutesFromNow: 31 },
+  { id: '9am', label: '9:00 AM', hour: 9, minute: 0 },
+  { id: '12pm', label: '12:00 PM', hour: 12, minute: 0 },
+  { id: '3pm', label: '3:00 PM', hour: 15, minute: 0 },
+  { id: '6pm', label: '6:00 PM', hour: 18, minute: 0 },
+  { id: '11pm', label: '11:00 PM', hour: 23, minute: 0 },
 ];
 
 const DURATION_OPTIONS = [
@@ -75,31 +108,91 @@ const DURATION_OPTIONS = [
 
 export default function NewTaskScreen() {
   const { addTask, nowMs } = useTasks();
+  const params = useLocalSearchParams<{
+    preset?: string;
+    dayOffset?: string;
+  }>();
+
+  const initialDayOffset = useMemo(() => {
+    if (params.dayOffset !== undefined) {
+      const parsed = Number(params.dayOffset);
+      return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    if (params.preset === 'tomorrow') return 1;
+    if (params.preset === 'next-tomorrow') return 2;
+    return 0;
+  }, [params.dayOffset, params.preset]);
 
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
-  const [category, setCategory] = useState<CategoryId>('deep-work');
-  const [selectedPresetId, setSelectedPresetId] = useState<string>('in-31m');
-  const [scheduledDate, setScheduledDate] = useState<Date>(
-    () => new Date(Date.now() + 31 * 60 * 1000)
-  );
+  const [category, setCategory] = useState<CategoryId>('inbox');
+  const [priority, setPriority] = useState<PriorityLevel>(4);
+  const [dayOffset, setDayOffset] = useState<number>(initialDayOffset);
+
+  // Clock time state (default to +31 mins if Today, or 10:00 AM if future day)
+  const [scheduledDate, setScheduledDate] = useState<Date>(() => {
+    if (initialDayOffset === 0) {
+      return new Date(Date.now() + 31 * 60 * 1000);
+    }
+    const d = getStartOfDay(new Date());
+    d.setDate(d.getDate() + initialDayOffset);
+    d.setHours(10, 0, 0, 0);
+    return d;
+  });
+
   const [durationMinutes, setDurationMinutes] = useState<number>(60);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const selectPreset = (preset: StartPreset) => {
-    setSelectedPresetId(preset.id);
-    setScheduledDate(preset.getStartDate());
+  // Apply a Day Offset while preserving the chosen hour/minute
+  const handleSelectDayOffset = (newOffset: number) => {
+    const safeOffset = Math.max(0, newOffset);
+    setDayOffset(safeOffset);
+    setScheduledDate((prev) => {
+      const base = getStartOfDay(new Date(nowMs));
+      base.setDate(base.getDate() + safeOffset);
+      base.setHours(prev.getHours(), prev.getMinutes(), 0, 0);
+      // If user picked Today and the hour was in the past, bump to +31 mins from now
+      if (safeOffset === 0 && base.getTime() <= nowMs + 60 * 1000) {
+        return new Date(nowMs + 31 * 60 * 1000);
+      }
+      return base;
+    });
   };
 
-  const adjustStartMinutes = (deltaMinutes: number) => {
-    setSelectedPresetId('custom');
+  const handleSelectTimeSlot = (slot: (typeof TIME_SLOTS)[number]) => {
+    if ('minutesFromNow' in slot && slot.minutesFromNow !== undefined) {
+      setDayOffset(0);
+      setScheduledDate(new Date(nowMs + slot.minutesFromNow * 60 * 1000));
+      return;
+    }
+    setScheduledDate(() => {
+      const base = getStartOfDay(new Date(nowMs));
+      base.setDate(base.getDate() + dayOffset);
+      base.setHours(slot.hour ?? 9, slot.minute ?? 0, 0, 0);
+      if (dayOffset === 0 && base.getTime() <= nowMs + 60 * 1000) {
+        // Automatically schedule for tomorrow if that clock time already passed today
+        base.setDate(base.getDate() + 1);
+        setDayOffset(1);
+      }
+      return base;
+    });
+  };
+
+  const adjustClockMinutes = (deltaMinutes: number) => {
     setScheduledDate((prev) => {
       const nextMs = Math.max(
-        Date.now() + 30 * 1000,
+        nowMs + 30 * 1000,
         prev.getTime() + deltaMinutes * 60 * 1000
       );
-      return new Date(nextMs);
+      const nextDate = new Date(nextMs);
+      const todayStart = getStartOfDay(new Date(nowMs));
+      const nextStart = getStartOfDay(nextDate);
+      const computedOffset = Math.round(
+        (nextStart.getTime() - todayStart.getTime()) / (24 * 60 * 60 * 1000)
+      );
+      setDayOffset(Math.max(0, computedOffset));
+      return nextDate;
     });
   };
 
@@ -108,7 +201,6 @@ export default function NewTaskScreen() {
     return new Date(scheduledDate.getTime() + durationMinutes * 60 * 1000);
   }, [scheduledDate, durationMinutes]);
 
-  // Compute exact 30m, 15m, and 0m notification times for live preview
   const cadencePreview = useMemo(() => {
     const startMs = scheduledDate.getTime();
     const t30 = new Date(startMs - 30 * 60 * 1000);
@@ -116,29 +208,29 @@ export default function NewTaskScreen() {
 
     return [
       {
-        stage: '-30 MIN ALERT',
+        stage: '-30m Alert',
         time: formatClockTime(t30.toISOString()),
         willFire: t30.getTime() > nowMs + 3000,
-        desc: 'Heads-up: Get ready to start task in 30 minutes',
+        desc: 'Get ready: Task starts in 30 mins',
       },
       {
-        stage: '-15 MIN ALERT',
+        stage: '-15m Alert',
         time: formatClockTime(t15.toISOString()),
         willFire: t15.getTime() > nowMs + 3000,
-        desc: 'Reminder: 15 minutes remaining until task begins',
+        desc: 'Reminder: 15 mins left before start',
       },
       {
-        stage: 'START TIME (0M)',
+        stage: 'Start (0m)',
         time: formatClockTime(scheduledDate.toISOString()),
         willFire: startMs > nowMs + 2000,
-        desc: 'Action: Open Cadence & tap "Starting Now"',
+        desc: 'Start your task now! Tap "Start Now"',
       },
     ];
   }, [scheduledDate, nowMs]);
 
   const handleSave = async () => {
     if (!title.trim()) {
-      setErrorMsg('Please enter a task title.');
+      setErrorMsg('Please enter a task name.');
       return;
     }
 
@@ -149,6 +241,7 @@ export default function NewTaskScreen() {
         title: title.trim(),
         notes: notes.trim(),
         category,
+        priority,
         scheduledStartAt: scheduledDate.toISOString(),
         deadlineAt: deadlineDate ? deadlineDate.toISOString() : null,
       });
@@ -159,26 +252,36 @@ export default function NewTaskScreen() {
     }
   };
 
+  const selectedDateLabel = formatShortDate(scheduledDate.toISOString(), nowMs);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Top Modal Header */}
+        {/* Todoist Quick-Add Top Bar */}
         <View style={styles.header}>
           <Pressable
             onPress={() => router.back()}
             hitSlop={10}
-            style={styles.closeBtn}
+            style={styles.cancelBtn}
           >
-            <Ionicons name="close" size={20} color={Palette.ink} />
+            <Text style={styles.cancelText}>Cancel</Text>
           </Pressable>
-          <Text style={styles.headerTitle}>Schedule Task</Text>
-          <View style={styles.sqliteBadge}>
-            <Ionicons name="save-outline" size={12} color={Palette.forest} />
-            <Text style={styles.sqliteBadgeText}>SQLite</Text>
-          </View>
+
+          <Text style={styles.headerTitle}>Add Task</Text>
+
+          <Pressable
+            disabled={submitting}
+            onPress={handleSave}
+            style={[
+              styles.sendCircleBtn,
+              !title.trim() && { opacity: 0.45 },
+            ]}
+          >
+            <Ionicons name="arrow-up" size={18} color={TodoistColors.white} />
+          </Pressable>
         </View>
 
         <ScrollView
@@ -186,17 +289,16 @@ export default function NewTaskScreen() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Task Title & Notes */}
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>TASK SPECIFICATION</Text>
+          {/* Todoist Task Name & Description Box */}
+          <View style={styles.editorBox}>
             <TextInput
               value={title}
               onChangeText={(t) => {
                 setTitle(t);
                 if (errorMsg) setErrorMsg(null);
               }}
-              placeholder="What needs your undivided focus?"
-              placeholderTextColor={Palette.inkFaint}
+              placeholder="e.g., File quarterly taxes tomorrow at 10am"
+              placeholderTextColor={TodoistColors.textFaint}
               style={styles.titleInput}
               autoFocus
             />
@@ -204,17 +306,250 @@ export default function NewTaskScreen() {
             <TextInput
               value={notes}
               onChangeText={setNotes}
-              placeholder="Optional checklist, deliverables, or context..."
-              placeholderTextColor={Palette.inkFaint}
+              placeholder="Description"
+              placeholderTextColor={TodoistColors.textMuted}
               style={styles.notesInput}
               multiline
             />
+
             {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
           </View>
 
-          {/* Category Selector */}
+          {/* Todoist Interactive Metadata Summary Pills */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.summaryPillsRow}
+          >
+            <View
+              style={[
+                styles.activeSummaryChip,
+                {
+                  borderColor:
+                    dayOffset === 0
+                      ? TodoistColors.dateToday
+                      : dayOffset === 1
+                      ? TodoistColors.dateTomorrow
+                      : TodoistColors.dateUpcoming,
+                },
+              ]}
+            >
+              <Ionicons
+                name="calendar-outline"
+                size={14}
+                color={
+                  dayOffset === 0
+                    ? TodoistColors.dateToday
+                    : dayOffset === 1
+                    ? TodoistColors.dateTomorrow
+                    : TodoistColors.dateUpcoming
+                }
+              />
+              <Text
+                style={[
+                  styles.activeSummaryChipText,
+                  {
+                    color:
+                      dayOffset === 0
+                        ? TodoistColors.dateToday
+                        : dayOffset === 1
+                        ? TodoistColors.dateTomorrow
+                        : TodoistColors.dateUpcoming,
+                  },
+                ]}
+              >
+                {selectedDateLabel} · {formatClockTime(scheduledDate.toISOString())}
+              </Text>
+            </View>
+
+            <View style={styles.activeSummaryChip}>
+              <Ionicons
+                name="flag"
+                size={13}
+                color={
+                  Priorities.find((p) => p.level === priority)?.color ??
+                  TodoistColors.p4
+                }
+              />
+              <Text style={styles.activeSummaryChipText}>P{priority}</Text>
+            </View>
+
+            <View style={styles.activeSummaryChip}>
+              <Text style={styles.hashSymbol}>#</Text>
+              <Text style={styles.activeSummaryChipText}>
+                {Categories.find((c) => c.id === category)?.label}
+              </Text>
+            </View>
+
+            <View style={styles.activeSummaryChip}>
+              <Ionicons
+                name="notifications-outline"
+                size={13}
+                color={TodoistColors.red}
+              />
+              <Text style={styles.activeSummaryChipText}>30m · 15m · 0m</Text>
+            </View>
+          </ScrollView>
+
+          {/* 1. Schedule Day Selector (Today, Tomorrow, Next Tomorrow, or Custom Day) */}
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>CATEGORY</Text>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionLabel}>
+                WHEN DO YOU WANT TO DO THIS?
+              </Text>
+              <View style={styles.customDayStepper}>
+                <Pressable
+                  onPress={() => handleSelectDayOffset(dayOffset - 1)}
+                  style={styles.miniDayBtn}
+                >
+                  <Text style={styles.miniDayBtnText}>-1 Day</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => handleSelectDayOffset(dayOffset + 1)}
+                  style={styles.miniDayBtn}
+                >
+                  <Text style={styles.miniDayBtnText}>+1 Day</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipsScroll}
+            >
+              {DAY_PRESETS.map((preset) => {
+                const isSelected = dayOffset === preset.dayOffset;
+                return (
+                  <Pressable
+                    key={preset.id}
+                    onPress={() => handleSelectDayOffset(preset.dayOffset)}
+                    style={[
+                      styles.dayPresetCard,
+                      isSelected && {
+                        borderColor: preset.color,
+                        backgroundColor: preset.bg,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={preset.icon}
+                      size={16}
+                      color={preset.color}
+                    />
+                    <View>
+                      <Text
+                        style={[
+                          styles.dayPresetTitle,
+                          isSelected && { color: preset.color, fontWeight: '800' },
+                        ]}
+                      >
+                        {preset.label}
+                      </Text>
+                      <Text style={styles.dayPresetSub}>{preset.sublabel}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* 2. Start Time & Fine-Tune Stepper */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>START TIME</Text>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipsScroll}
+            >
+              {TIME_SLOTS.map((slot) => (
+                <Pressable
+                  key={slot.id}
+                  onPress={() => handleSelectTimeSlot(slot)}
+                  style={styles.timeSlotChip}
+                >
+                  <Text style={styles.timeSlotText}>{slot.label}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <View style={styles.clockCard}>
+              <View>
+                <Text style={styles.clockDateSub}>
+                  {selectedDateLabel.toUpperCase()}
+                </Text>
+                <Text style={styles.clockBigDigits}>
+                  {formatClockTime(scheduledDate.toISOString())}
+                </Text>
+              </View>
+
+              <View style={styles.stepperRow}>
+                <Pressable
+                  onPress={() => adjustClockMinutes(-15)}
+                  style={styles.stepperBtn}
+                >
+                  <Text style={styles.stepperBtnText}>-15m</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => adjustClockMinutes(-5)}
+                  style={styles.stepperBtn}
+                >
+                  <Text style={styles.stepperBtnText}>-5m</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => adjustClockMinutes(5)}
+                  style={styles.stepperBtn}
+                >
+                  <Text style={styles.stepperBtnText}>+5m</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => adjustClockMinutes(15)}
+                  style={styles.stepperBtn}
+                >
+                  <Text style={styles.stepperBtnText}>+15m</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+
+          {/* 3. Todoist Priority Flags (P1 - P4) */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>PRIORITY LEVEL</Text>
+            <View style={styles.priorityRow}>
+              {Priorities.map((p) => {
+                const active = priority === p.level;
+                return (
+                  <Pressable
+                    key={p.level}
+                    onPress={() => setPriority(p.level)}
+                    style={[
+                      styles.priorityChip,
+                      active && {
+                        borderColor: p.color,
+                        backgroundColor:
+                          p.level === 4 ? TodoistColors.bgTertiary : p.fill,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="flag" size={14} color={p.color} />
+                    <Text
+                      style={[
+                        styles.priorityChipText,
+                        active && { color: TodoistColors.text, fontWeight: '800' },
+                      ]}
+                    >
+                      {p.short} · {p.desc}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* 4. Project / Category (#Project) */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>PROJECT</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -227,22 +562,20 @@ export default function NewTaskScreen() {
                     key={cat.id}
                     onPress={() => setCategory(cat.id)}
                     style={[
-                      styles.categoryChip,
+                      styles.projectChip,
                       selected && {
-                        backgroundColor: cat.color,
                         borderColor: cat.color,
+                        backgroundColor: cat.bg,
                       },
                     ]}
                   >
-                    <Ionicons
-                      name={cat.icon}
-                      size={14}
-                      color={selected ? Palette.white : cat.color}
-                    />
+                    <Text style={[styles.projectHash, { color: cat.color }]}>
+                      #
+                    </Text>
                     <Text
                       style={[
-                        styles.categoryChipText,
-                        selected && { color: Palette.white },
+                        styles.projectChipText,
+                        selected && { color: cat.color, fontWeight: '700' },
                       ]}
                     >
                       {cat.label}
@@ -253,104 +586,16 @@ export default function NewTaskScreen() {
             </ScrollView>
           </View>
 
-          {/* Start Time Presets & Stepper */}
+          {/* 5. Deadline Duration */}
           <View style={styles.section}>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>WHEN SHOULD IT START?</Text>
-              <Text style={styles.dateBadge}>
-                {formatShortDate(scheduledDate.toISOString())}
+              <Text style={styles.sectionLabel}>DEADLINE</Text>
+              <Text style={styles.deadlineReadout}>
+                {deadlineDate
+                  ? `Due ${formatClockTime(deadlineDate.toISOString())}`
+                  : 'No deadline'}
               </Text>
             </View>
-
-            {/* Quick Presets */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.presetsScroll}
-            >
-              {START_PRESETS.map((preset) => {
-                const isSelected = selectedPresetId === preset.id;
-                return (
-                  <Pressable
-                    key={preset.id}
-                    onPress={() => selectPreset(preset)}
-                    style={[
-                      styles.presetCard,
-                      isSelected && styles.presetCardSelected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.presetLabel,
-                        isSelected && styles.presetLabelSelected,
-                      ]}
-                    >
-                      {preset.label}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.presetSublabel,
-                        isSelected && styles.presetSublabelSelected,
-                      ]}
-                    >
-                      {preset.sublabel}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            {/* Fine-Tune Clock Dial */}
-            <View style={styles.clockDialCard}>
-              <View>
-                <Text style={styles.clockDialCaption}>SCHEDULED START TIME</Text>
-                <Text style={styles.clockDialTime}>
-                  {formatClockTime(scheduledDate.toISOString())}
-                </Text>
-              </View>
-
-              <View style={styles.stepperGroup}>
-                <Pressable
-                  onPress={() => adjustStartMinutes(-15)}
-                  style={styles.stepperBtn}
-                >
-                  <Text style={styles.stepperBtnText}>-15m</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => adjustStartMinutes(-5)}
-                  style={styles.stepperBtn}
-                >
-                  <Text style={styles.stepperBtnText}>-5m</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => adjustStartMinutes(5)}
-                  style={styles.stepperBtn}
-                >
-                  <Text style={styles.stepperBtnText}>+5m</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => adjustStartMinutes(15)}
-                  style={styles.stepperBtn}
-                >
-                  <Text style={styles.stepperBtnText}>+15m</Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-
-          {/* Deadline Duration */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>DEADLINE WINDOW</Text>
-              {deadlineDate ? (
-                <Text style={styles.deadlineReadout}>
-                  Deadline: {formatClockTime(deadlineDate.toISOString())}
-                </Text>
-              ) : (
-                <Text style={styles.deadlineReadout}>Open-ended</Text>
-              )}
-            </View>
-
             <View style={styles.durationRow}>
               {DURATION_OPTIONS.map((opt) => {
                 const active = durationMinutes === opt.minutes;
@@ -377,53 +622,55 @@ export default function NewTaskScreen() {
             </View>
           </View>
 
-          {/* Live Push Notification Schedule Preview */}
-          <View style={styles.cadencePreviewCard}>
-            <View style={styles.cadenceHeaderRow}>
+          {/* 6. Automatic 30m · 15m · Start Push Notification Schedule */}
+          <View style={styles.pushCard}>
+            <View style={styles.pushHeader}>
               <Ionicons
                 name="notifications"
-                size={16}
-                color={Palette.vermilion}
+                size={15}
+                color={TodoistColors.red}
               />
-              <Text style={styles.cadenceHeaderTitle}>
-                AUTOMATIC PUSH NOTIFICATION TIMELINE
+              <Text style={styles.pushHeaderTitle}>
+                PUSH NOTIFICATIONS FOR {selectedDateLabel.toUpperCase()}
               </Text>
             </View>
 
-            {cadencePreview.map((item, index) => (
-              <View key={item.stage} style={styles.cadenceTimelineRow}>
-                <View style={styles.cadenceTimeCol}>
+            {cadencePreview.map((item) => (
+              <View key={item.stage} style={styles.pushRow}>
+                <View style={styles.pushTimeBadge}>
                   <Text
                     style={[
-                      styles.cadenceTimeText,
-                      !item.willFire && styles.cadenceTimeSkipped,
+                      styles.pushTimeText,
+                      !item.willFire && styles.pushSkippedText,
                     ]}
                   >
                     {item.time}
                   </Text>
-                  <Text style={styles.cadenceStageLabel}>{item.stage}</Text>
+                  <Text style={styles.pushStageText}>{item.stage}</Text>
                 </View>
 
-                <View style={styles.cadenceDescCol}>
+                <View style={{ flex: 1 }}>
                   <Text
                     style={[
-                      styles.cadenceDescText,
-                      !item.willFire && styles.cadenceDescSkipped,
+                      styles.pushDescText,
+                      !item.willFire && styles.pushSkippedText,
                     ]}
                   >
                     {item.desc}
                   </Text>
                   <Text
                     style={[
-                      styles.cadenceStatusPill,
-                      item.willFire
-                        ? { color: Palette.forest }
-                        : { color: Palette.inkFaint },
+                      styles.pushStateText,
+                      {
+                        color: item.willFire
+                          ? TodoistColors.dateToday
+                          : TodoistColors.textMuted,
+                      },
                     ]}
                   >
                     {item.willFire
-                      ? '● Will schedule push notification'
-                      : '○ Window already passed (skipped)'}
+                      ? '● Armed on phone'
+                      : '○ Window already passed'}
                   </Text>
                 </View>
               </View>
@@ -431,7 +678,7 @@ export default function NewTaskScreen() {
           </View>
         </ScrollView>
 
-        {/* Bottom Save Bar */}
+        {/* Bottom CTA */}
         <View style={styles.footer}>
           <Pressable
             disabled={submitting}
@@ -439,12 +686,19 @@ export default function NewTaskScreen() {
             style={({ pressed }) => [
               styles.saveBtn,
               pressed && { opacity: 0.9 },
-              submitting && { opacity: 0.6 },
             ]}
           >
-            <Ionicons name="checkmark-circle" size={20} color={Palette.white} />
+            <Ionicons
+              name="checkmark-circle"
+              size={19}
+              color={TodoistColors.white}
+            />
             <Text style={styles.saveBtnText}>
-              {submitting ? 'Scheduling...' : 'Save Task & Arm Notifications'}
+              {submitting
+                ? 'Saving to device...'
+                : `Schedule for ${selectedDateLabel} at ${formatClockTime(
+                    scheduledDate.toISOString()
+                  )}`}
             </Text>
           </Pressable>
         </View>
@@ -456,51 +710,90 @@ export default function NewTaskScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: Palette.paper,
+    backgroundColor: TodoistColors.bg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Palette.border,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TodoistColors.border,
   },
-  closeBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: Palette.paperSubtle,
+  cancelBtn: {
+    paddingVertical: 4,
+  },
+  cancelText: {
+    color: TodoistColors.textSecondary,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  headerTitle: {
+    color: TodoistColors.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  sendCircleBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: TodoistColors.red,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    color: Palette.ink,
-    fontSize: 17,
-    fontWeight: '700',
+  scrollContent: {
+    padding: 18,
+    gap: 18,
+    paddingBottom: 32,
   },
-  sqliteBadge: {
+  editorBox: {
+    gap: 6,
+  },
+  titleInput: {
+    color: TodoistColors.text,
+    fontSize: 19,
+    fontWeight: '600',
+    paddingVertical: 4,
+  },
+  notesInput: {
+    color: TodoistColors.textSecondary,
+    fontSize: 14,
+    minHeight: 42,
+    textAlignVertical: 'top',
+  },
+  errorText: {
+    color: TodoistColors.red,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  summaryPillsRow: {
+    gap: 8,
+    paddingBottom: 6,
+  },
+  activeSummaryChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: Palette.forestSoft,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TodoistColors.borderStrong,
+    backgroundColor: TodoistColors.bgSecondary,
   },
-  sqliteBadgeText: {
-    color: Palette.forest,
-    fontSize: 11,
+  activeSummaryChipText: {
+    color: TodoistColors.text,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  hashSymbol: {
+    color: TodoistColors.textMuted,
+    fontSize: 13,
     fontWeight: '700',
   },
-  scrollContent: {
-    padding: 20,
-    gap: 22,
-    paddingBottom: 36,
-  },
   section: {
-    gap: 10,
+    gap: 9,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -508,142 +801,148 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   sectionLabel: {
-    color: Palette.inkMuted,
+    color: TodoistColors.textSecondary,
     fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 0.9,
+    letterSpacing: 0.6,
   },
-  dateBadge: {
-    color: Palette.vermilion,
-    fontFamily: Fonts?.mono,
-    fontSize: 12,
+  customDayStepper: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  miniDayBtn: {
+    backgroundColor: TodoistColors.bgTertiary,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  miniDayBtnText: {
+    color: TodoistColors.text,
+    fontSize: 11,
     fontWeight: '700',
-  },
-  titleInput: {
-    backgroundColor: Palette.paperElevated,
-    borderWidth: 1,
-    borderColor: Palette.border,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    color: Palette.ink,
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  notesInput: {
-    backgroundColor: Palette.paperElevated,
-    borderWidth: 1,
-    borderColor: Palette.border,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    color: Palette.ink,
-    fontSize: 14,
-    minHeight: 72,
-    textAlignVertical: 'top',
-  },
-  errorText: {
-    color: Palette.crimson,
-    fontSize: 13,
-    fontWeight: '600',
   },
   chipsScroll: {
     gap: 8,
   },
-  categoryChip: {
+  dayPresetCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 13,
+    gap: 8,
+    paddingHorizontal: 12,
     paddingVertical: 9,
-    borderRadius: 11,
-    backgroundColor: Palette.paperElevated,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: Palette.border,
+    borderColor: TodoistColors.borderStrong,
+    backgroundColor: TodoistColors.bg,
   },
-  categoryChipText: {
-    color: Palette.ink,
+  dayPresetTitle: {
+    color: TodoistColors.text,
     fontSize: 13,
     fontWeight: '600',
   },
-  presetsScroll: {
-    gap: 9,
+  dayPresetSub: {
+    color: TodoistColors.textMuted,
+    fontSize: 10,
   },
-  presetCard: {
-    backgroundColor: Palette.paperElevated,
+  timeSlotChip: {
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: TodoistColors.bgSecondary,
     borderWidth: 1,
-    borderColor: Palette.border,
-    borderRadius: 13,
-    paddingHorizontal: 13,
-    paddingVertical: 10,
-    minWidth: 125,
+    borderColor: TodoistColors.borderStrong,
   },
-  presetCardSelected: {
-    backgroundColor: Palette.ink,
-    borderColor: Palette.ink,
+  timeSlotText: {
+    color: TodoistColors.text,
+    fontSize: 12,
+    fontWeight: '600',
   },
-  presetLabel: {
-    color: Palette.ink,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  presetLabelSelected: {
-    color: Palette.white,
-  },
-  presetSublabel: {
-    color: Palette.inkMuted,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  presetSublabelSelected: {
-    color: Palette.inkFaint,
-  },
-  clockDialCard: {
-    backgroundColor: Palette.paperElevated,
-    borderWidth: 1,
-    borderColor: Palette.border,
-    borderRadius: 16,
-    padding: 14,
+  clockCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     flexWrap: 'wrap',
     gap: 10,
+    backgroundColor: TodoistColors.bgSecondary,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: TodoistColors.border,
   },
-  clockDialCaption: {
-    color: Palette.inkMuted,
+  clockDateSub: {
+    color: TodoistColors.red,
     fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.8,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
-  clockDialTime: {
-    color: Palette.ink,
+  clockBigDigits: {
+    color: TodoistColors.text,
     fontFamily: Fonts?.mono,
-    fontSize: 26,
+    fontSize: 22,
     fontWeight: '800',
     marginTop: 2,
   },
-  stepperGroup: {
+  stepperRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: 6,
   },
   stepperBtn: {
-    backgroundColor: Palette.paperSubtle,
+    backgroundColor: TodoistColors.bg,
     borderWidth: 1,
-    borderColor: Palette.border,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 9,
+    borderColor: TodoistColors.borderStrong,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
   stepperBtnText: {
-    color: Palette.ink,
+    color: TodoistColors.text,
     fontFamily: Fonts?.mono,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
+  priorityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  priorityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TodoistColors.borderStrong,
+    backgroundColor: TodoistColors.bg,
+  },
+  priorityChipText: {
+    color: TodoistColors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  projectChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TodoistColors.borderStrong,
+    backgroundColor: TodoistColors.bg,
+  },
+  projectHash: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  projectChipText: {
+    color: TodoistColors.text,
+    fontSize: 12,
+    fontWeight: '600',
+  },
   deadlineReadout: {
-    color: Palette.ink,
+    color: TodoistColors.text,
     fontFamily: Fonts?.mono,
     fontSize: 12,
     fontWeight: '700',
@@ -651,111 +950,102 @@ const styles = StyleSheet.create({
   durationRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 7,
   },
   durationChip: {
-    paddingHorizontal: 13,
-    paddingVertical: 9,
-    borderRadius: 10,
-    backgroundColor: Palette.paperElevated,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: Palette.border,
+    borderColor: TodoistColors.borderStrong,
+    backgroundColor: TodoistColors.bg,
   },
   durationChipActive: {
-    backgroundColor: Palette.vermilionSoft,
-    borderColor: Palette.vermilion,
+    borderColor: TodoistColors.red,
+    backgroundColor: TodoistColors.redSoft,
   },
   durationChipText: {
-    color: Palette.inkMuted,
-    fontSize: 13,
+    color: TodoistColors.textSecondary,
+    fontSize: 12,
     fontWeight: '600',
   },
   durationChipTextActive: {
-    color: Palette.vermilion,
+    color: TodoistColors.red,
     fontWeight: '700',
   },
-  cadencePreviewCard: {
-    backgroundColor: Palette.paperElevated,
-    borderRadius: 16,
-    padding: 15,
+  pushCard: {
+    backgroundColor: TodoistColors.bgSecondary,
+    borderRadius: 12,
+    padding: 13,
     borderWidth: 1,
-    borderColor: Palette.border,
-    gap: 12,
+    borderColor: TodoistColors.border,
+    gap: 10,
   },
-  cadenceHeaderRow: {
+  pushHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Palette.border,
+    gap: 6,
+    paddingBottom: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: TodoistColors.borderStrong,
   },
-  cadenceHeaderTitle: {
-    color: Palette.ink,
+  pushHeaderTitle: {
+    color: TodoistColors.text,
     fontSize: 11,
     fontWeight: '800',
-    letterSpacing: 0.7,
+    letterSpacing: 0.5,
   },
-  cadenceTimelineRow: {
+  pushRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
+    alignItems: 'center',
+    gap: 10,
   },
-  cadenceTimeCol: {
-    width: 96,
+  pushTimeBadge: {
+    width: 84,
   },
-  cadenceTimeText: {
-    color: Palette.ink,
+  pushTimeText: {
+    color: TodoistColors.text,
     fontFamily: Fonts?.mono,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
   },
-  cadenceTimeSkipped: {
-    textDecorationLine: 'line-through',
-    color: Palette.inkFaint,
-  },
-  cadenceStageLabel: {
-    color: Palette.vermilion,
+  pushStageText: {
+    color: TodoistColors.red,
     fontSize: 9,
     fontWeight: '700',
-    letterSpacing: 0.5,
-    marginTop: 1,
   },
-  cadenceDescCol: {
-    flex: 1,
-  },
-  cadenceDescText: {
-    color: Palette.ink,
-    fontSize: 13,
+  pushDescText: {
+    color: TodoistColors.text,
+    fontSize: 12,
     fontWeight: '600',
   },
-  cadenceDescSkipped: {
-    color: Palette.inkFaint,
+  pushSkippedText: {
+    textDecorationLine: 'line-through',
+    color: TodoistColors.textMuted,
   },
-  cadenceStatusPill: {
-    fontSize: 11,
+  pushStateText: {
+    fontSize: 10,
     fontWeight: '600',
-    marginTop: 2,
   },
   footer: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: Palette.border,
-    backgroundColor: Palette.paper,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: TodoistColors.border,
+    backgroundColor: TodoistColors.bg,
   },
   saveBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    backgroundColor: Palette.vermilion,
-    paddingVertical: 15,
-    borderRadius: 15,
+    gap: 7,
+    backgroundColor: TodoistColors.red,
+    paddingVertical: 14,
+    borderRadius: 11,
   },
   saveBtnText: {
-    color: Palette.white,
-    fontSize: 15,
+    color: TodoistColors.white,
+    fontSize: 14,
     fontWeight: '700',
   },
 });

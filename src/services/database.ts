@@ -7,6 +7,7 @@ export interface TaskRecord {
   title: string;
   notes: string;
   category: string;
+  priority: number; // 1 = P1 (Red), 2 = P2 (Orange), 3 = P3 (Blue), 4 = P4 (Grey)
   scheduledStartAt: string; // ISO 8601 timestamp
   deadlineAt: string | null; // ISO 8601 timestamp
   status: TaskStatus;
@@ -25,6 +26,7 @@ export interface CreateTaskInput {
   title: string;
   notes: string;
   category: string;
+  priority?: number;
   scheduledStartAt: string;
   deadlineAt: string | null;
 }
@@ -49,7 +51,8 @@ export async function migrateDatabaseAsync(db: SQLiteDatabase): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       notes TEXT NOT NULL DEFAULT '',
-      category TEXT NOT NULL DEFAULT 'deep-work',
+      category TEXT NOT NULL DEFAULT 'inbox',
+      priority INTEGER NOT NULL DEFAULT 4,
       scheduledStartAt TEXT NOT NULL,
       deadlineAt TEXT,
       status TEXT NOT NULL DEFAULT 'scheduled',
@@ -68,78 +71,181 @@ export async function migrateDatabaseAsync(db: SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduledStartAt);
   `);
 
-  // Seed initial sample tasks if the database is brand new so the user sees a rich timeline immediately
+  // Ensure priority column exists if upgrading from v1 schema
+  try {
+    await db.execAsync(
+      'ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 4;'
+    );
+  } catch {
+    // Column already exists
+  }
+
+  // Seed initial sample tasks for Today, Tomorrow, and Next Tomorrow if not yet seeded
   const seeded = await db.getFirstAsync<{ value: string }>(
     'SELECT value FROM app_settings WHERE key = ?',
-    'seeded_v1'
+    'seeded_todoist_v2'
   );
 
   if (!seeded) {
     const now = Date.now();
-    const in45Min = new Date(now + 45 * 60 * 1000).toISOString();
-    const in105Min = new Date(now + 105 * 60 * 1000).toISOString();
+    const in40Min = new Date(now + 40 * 60 * 1000).toISOString();
+    const in100Min = new Date(now + 100 * 60 * 1000).toISOString();
     const in2Hours = new Date(now + 120 * 60 * 1000).toISOString();
     const in3Hours = new Date(now + 180 * 60 * 1000).toISOString();
-    const earlierStart = new Date(now - 90 * 60 * 1000).toISOString();
-    const earlierDone = new Date(now - 52 * 60 * 1000).toISOString();
 
-    await db.runAsync(
-      `INSERT INTO tasks (
-        title, notes, category, scheduledStartAt, deadlineAt, status,
-        actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      'Q4 Tax Filing & Expense Reconciliation',
-      'Cross-check Stripe payouts, contractor invoices, and quarterly deduction receipts before closing the ledger.',
-      'tax-finance',
-      in45Min,
-      in105Min,
-      'scheduled',
-      null,
-      null,
-      0,
-      null,
-      new Date(now).toISOString()
+    // Tomorrow at 10:00 AM and 2:00 PM
+    const tomorrow10am = new Date(now);
+    tomorrow10am.setDate(tomorrow10am.getDate() + 1);
+    tomorrow10am.setHours(10, 0, 0, 0);
+    const tomorrow11am = new Date(tomorrow10am.getTime() + 60 * 60 * 1000);
+
+    const tomorrow2pm = new Date(now);
+    tomorrow2pm.setDate(tomorrow2pm.getDate() + 1);
+    tomorrow2pm.setHours(14, 0, 0, 0);
+    const tomorrow330pm = new Date(tomorrow2pm.getTime() + 90 * 60 * 1000);
+
+    // Next Tomorrow (+2 days) at 11:00 AM
+    const nextTomorrow11am = new Date(now);
+    nextTomorrow11am.setDate(nextTomorrow11am.getDate() + 2);
+    nextTomorrow11am.setHours(11, 0, 0, 0);
+    const nextTomorrow12pm = new Date(
+      nextTomorrow11am.getTime() + 60 * 60 * 1000
     );
 
-    await db.runAsync(
-      `INSERT INTO tasks (
-        title, notes, category, scheduledStartAt, deadlineAt, status,
-        actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      'Architecture Review & API Contract Sign-off',
-      'Finalize SQLite offline schema and review notification cadence intervals with mobile team.',
-      'deep-work',
-      in2Hours,
-      in3Hours,
-      'scheduled',
-      null,
-      null,
-      0,
-      null,
-      new Date(now).toISOString()
-    );
+    const earlierStart = new Date(now - 75 * 60 * 1000).toISOString();
+    const earlierDone = new Date(now - 30 * 60 * 1000).toISOString();
 
-    await db.runAsync(
-      `INSERT INTO tasks (
-        title, notes, category, scheduledStartAt, deadlineAt, status,
-        actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      'Morning Payroll & Vendor Audit',
-      'Verified recurring software subscriptions and cleared pending reimbursement receipts.',
-      'operations',
-      earlierStart,
-      earlierDone,
-      'completed',
-      earlierStart,
-      null,
-      38 * 60 + 14,
-      earlierDone,
-      earlierStart
+    // Clear old seed if user hasn't added custom tasks
+    const existingCount = await db.getFirstAsync<{ cnt: number }>(
+      'SELECT COUNT(*) as cnt FROM tasks'
     );
+    if ((existingCount?.cnt ?? 0) <= 3) {
+      await db.execAsync('DELETE FROM tasks;');
+
+      // 1. Today Urgent P1 Task
+      await db.runAsync(
+        `INSERT INTO tasks (
+          title, notes, category, priority, scheduledStartAt, deadlineAt, status,
+          actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'Review quarterly tax filings & VAT receipts',
+        'Verify deductible invoices and export signed PDF ledger before deadline.',
+        'tax-finance',
+        1,
+        in40Min,
+        in100Min,
+        'scheduled',
+        null,
+        null,
+        0,
+        null,
+        new Date(now).toISOString()
+      );
+
+      // 2. Today High P2 Task
+      await db.runAsync(
+        `INSERT INTO tasks (
+          title, notes, category, priority, scheduledStartAt, deadlineAt, status,
+          actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'Prepare client sprint roadmap & deliverables',
+        'Send updated milestone schedule and confirm Friday demo slot.',
+        'deep-work',
+        2,
+        in2Hours,
+        in3Hours,
+        'scheduled',
+        null,
+        null,
+        0,
+        null,
+        new Date(now).toISOString()
+      );
+
+      // 3. Tomorrow Task 1
+      await db.runAsync(
+        `INSERT INTO tasks (
+          title, notes, category, priority, scheduledStartAt, deadlineAt, status,
+          actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'Submit contractor payout batch & bank reconciliation',
+        'Double check routing numbers and tax withholding percentages.',
+        'tax-finance',
+        1,
+        tomorrow10am.toISOString(),
+        tomorrow11am.toISOString(),
+        'scheduled',
+        null,
+        null,
+        0,
+        null,
+        new Date(now).toISOString()
+      );
+
+      // 4. Tomorrow Task 2
+      await db.runAsync(
+        `INSERT INTO tasks (
+          title, notes, category, priority, scheduledStartAt, deadlineAt, status,
+          actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'Product design sync & mobile UI walkthrough',
+        'Review Todoist Today & Upcoming calendar interactions.',
+        'client',
+        3,
+        tomorrow2pm.toISOString(),
+        tomorrow330pm.toISOString(),
+        'scheduled',
+        null,
+        null,
+        0,
+        null,
+        new Date(now).toISOString()
+      );
+
+      // 5. Next Tomorrow (+2 days) Task
+      await db.runAsync(
+        `INSERT INTO tasks (
+          title, notes, category, priority, scheduledStartAt, deadlineAt, status,
+          actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'Audit monthly cloud & software subscriptions',
+        'Cancel unused seats and archive receipts in local SQLite log.',
+        'operations',
+        2,
+        nextTomorrow11am.toISOString(),
+        nextTomorrow12pm.toISOString(),
+        'scheduled',
+        null,
+        null,
+        0,
+        null,
+        new Date(now).toISOString()
+      );
+
+      // 6. Completed Today Task (so Activity Log shows What You've Done Today right away)
+      await db.runAsync(
+        `INSERT INTO tasks (
+          title, notes, category, priority, scheduledStartAt, deadlineAt, status,
+          actualStartedAt, lastResumedAt, accumulatedSeconds, completedAt, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'Morning inbox zero & priority triage',
+        'Cleared 18 emails and scheduled deep-work blocks for the week.',
+        'inbox',
+        3,
+        earlierStart,
+        earlierDone,
+        'completed',
+        earlierStart,
+        null,
+        42 * 60 + 18,
+        earlierDone,
+        earlierStart
+      );
+    }
 
     await db.runAsync(
       'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
-      'seeded_v1',
+      'seeded_todoist_v2',
       'true'
     );
   }
@@ -170,7 +276,7 @@ export async function setSettingAsync(
 
 export async function getAllTasksAsync(db: SQLiteDatabase): Promise<TaskRecord[]> {
   return db.getAllAsync<TaskRecord>(
-    'SELECT * FROM tasks ORDER BY scheduledStartAt ASC'
+    'SELECT * FROM tasks ORDER BY scheduledStartAt ASC, priority ASC'
   );
 }
 
@@ -188,17 +294,36 @@ export async function createTaskAsync(
   const nowIso = new Date().toISOString();
   const result = await db.runAsync(
     `INSERT INTO tasks (
-      title, notes, category, scheduledStartAt, deadlineAt,
+      title, notes, category, priority, scheduledStartAt, deadlineAt,
       status, accumulatedSeconds, createdAt
-    ) VALUES (?, ?, ?, ?, ?, 'scheduled', 0, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, 'scheduled', 0, ?)`,
     input.title.trim(),
     input.notes.trim(),
     input.category,
+    input.priority ?? 4,
     input.scheduledStartAt,
     input.deadlineAt,
     nowIso
   );
   return result.lastInsertRowId;
+}
+
+export async function rescheduleTaskAsync(
+  db: SQLiteDatabase,
+  taskId: number,
+  scheduledStartAt: string,
+  deadlineAt: string | null
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE tasks
+     SET scheduledStartAt = ?,
+         deadlineAt = ?,
+         status = CASE WHEN status = 'completed' THEN 'scheduled' ELSE status END
+     WHERE id = ?`,
+    scheduledStartAt,
+    deadlineAt,
+    taskId
+  );
 }
 
 export async function updateTaskNotificationsAsync(

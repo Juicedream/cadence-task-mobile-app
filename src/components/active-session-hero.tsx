@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Fonts, Palette } from '@/constants/theme';
+import { Fonts, TodoistColors } from '@/constants/theme';
 import { useTasks } from '@/context/tasks-context';
 import { computeLiveElapsedSeconds, type TaskRecord } from '@/services/database';
 import {
@@ -26,7 +26,7 @@ export function ActiveSessionHero({ task }: { task: TaskRecord }) {
       onPress={() => router.push(`/task/${task.id}`)}
       style={({ pressed }) => [
         styles.container,
-        pressed && { opacity: 0.96, transform: [{ scale: 0.995 }] },
+        pressed && { opacity: 0.96 },
       ]}
     >
       {/* Top Status Strip */}
@@ -35,115 +35,86 @@ export function ActiveSessionHero({ task }: { task: TaskRecord }) {
           <View
             style={[
               styles.pulseDot,
-              { backgroundColor: isRunning ? Palette.vermilion : Palette.amber },
+              {
+                backgroundColor: isRunning
+                  ? TodoistColors.red
+                  : TodoistColors.p2,
+              },
             ]}
           />
           <Text style={styles.liveBadgeText}>
-            {isRunning ? 'ACTIVE SESSION · LIVE' : 'SESSION PAUSED'}
+            {isRunning ? 'TRACKING NOW' : 'TIMER PAUSED'}
           </Text>
         </View>
 
-        <View style={styles.openPill}>
-          <Text style={styles.openPillText}>Focus Console</Text>
-          <Ionicons name="arrow-up-right-box-outline" size={13} color={Palette.inkFaint} />
-        </View>
+        {deadlineDiffSec !== null ? (
+          <Text
+            style={[
+              styles.deadlineBadgeText,
+              deadlineDiffSec < 0 && { color: '#FF7A6B' },
+            ]}
+          >
+            {deadlineDiffSec >= 0
+              ? `${formatHumanDuration(deadlineDiffSec)} until deadline (${formatClockTime(
+                  task.deadlineAt
+                )})`
+              : `${formatHumanDuration(Math.abs(deadlineDiffSec))} past deadline`}
+          </Text>
+        ) : (
+          <Text style={styles.deadlineBadgeText}>
+            Started {formatClockTime(task.actualStartedAt ?? task.scheduledStartAt)}
+          </Text>
+        )}
       </View>
 
-      {/* Task Title & Schedule */}
-      <Text style={styles.title} numberOfLines={2}>
-        {task.title}
-      </Text>
-      {task.notes ? (
-        <Text style={styles.notes} numberOfLines={1}>
-          {task.notes}
-        </Text>
-      ) : null}
-
-      {/* Big Chronometer Readout */}
-      <View style={styles.timerRow}>
-        <View>
-          <Text style={styles.timerLabel}>ELAPSED TIME</Text>
-          <Text style={styles.timerDigits}>{formatDurationClock(elapsedSeconds)}</Text>
+      {/* Main Row: Task Title + Big Chronometer + Controls */}
+      <View style={styles.mainRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title} numberOfLines={1}>
+            {task.title}
+          </Text>
+          <Text style={styles.timerDigits}>
+            {formatDurationClock(elapsedSeconds)}
+          </Text>
         </View>
 
-        {deadlineDiffSec !== null ? (
-          <View style={styles.deadlineBox}>
-            <Text style={styles.deadlineLabel}>
-              {deadlineDiffSec >= 0 ? 'UNTIL DEADLINE' : 'PAST DEADLINE'}
-            </Text>
-            <Text
+        <View style={styles.actionsCluster}>
+          {isRunning ? (
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                pauseTask(task.id);
+              }}
+              style={styles.iconCircleBtn}
+            >
+              <Ionicons name="pause" size={16} color={TodoistColors.white} />
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                resumeTask(task.id);
+              }}
               style={[
-                styles.deadlineValue,
-                deadlineDiffSec < 0 && { color: '#FF7A6B' },
+                styles.iconCircleBtn,
+                { backgroundColor: TodoistColors.p2 },
               ]}
             >
-              {deadlineDiffSec >= 0
-                ? formatHumanDuration(deadlineDiffSec)
-                : `+${formatHumanDuration(Math.abs(deadlineDiffSec))}`}
-            </Text>
-            <Text style={styles.deadlineClock}>
-              Due {formatClockTime(task.deadlineAt)}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.deadlineBox}>
-            <Text style={styles.deadlineLabel}>STARTED AT</Text>
-            <Text style={styles.deadlineValue}>
-              {formatClockTime(task.actualStartedAt ?? task.scheduledStartAt)}
-            </Text>
-            <Text style={styles.deadlineClock}>On-device log</Text>
-          </View>
-        )}
-      </View>
+              <Ionicons name="play" size={16} color={TodoistColors.white} />
+            </Pressable>
+          )}
 
-      {/* Controls Bar */}
-      <View style={styles.controlsRow}>
-        {isRunning ? (
           <Pressable
             onPress={(e) => {
               e.stopPropagation();
-              pauseTask(task.id);
+              completeTask(task.id);
             }}
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              pressed && { opacity: 0.8 },
-            ]}
+            style={styles.doneBtn}
           >
-            <Ionicons name="pause" size={16} color={Palette.paper} />
-            <Text style={styles.secondaryBtnText}>Pause</Text>
+            <Ionicons name="checkmark" size={16} color={TodoistColors.white} />
+            <Text style={styles.doneBtnText}>Done</Text>
           </Pressable>
-        ) : (
-          <Pressable
-            onPress={(e) => {
-              e.stopPropagation();
-              resumeTask(task.id);
-            }}
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              { borderColor: Palette.amber },
-              pressed && { opacity: 0.8 },
-            ]}
-          >
-            <Ionicons name="play" size={16} color={Palette.amber} />
-            <Text style={[styles.secondaryBtnText, { color: Palette.amber }]}>
-              Resume
-            </Text>
-          </Pressable>
-        )}
-
-        <Pressable
-          onPress={(e) => {
-            e.stopPropagation();
-            completeTask(task.id);
-          }}
-          style={({ pressed }) => [
-            styles.completeBtn,
-            pressed && { opacity: 0.85 },
-          ]}
-        >
-          <Ionicons name="checkmark-circle" size={18} color={Palette.white} />
-          <Text style={styles.completeBtnText}>Complete Task</Text>
-        </Pressable>
+        </View>
       </View>
     </Pressable>
   );
@@ -151,151 +122,86 @@ export function ActiveSessionHero({ task }: { task: TaskRecord }) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: Palette.ink,
-    borderRadius: 22,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#2E2D29',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
-    elevation: 6,
+    backgroundColor: TodoistColors.trackerBg,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    gap: 6,
   },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
   },
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#252420',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    gap: 7,
+    gap: 6,
   },
   pulseDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 4,
   },
   liveBadgeText: {
-    color: Palette.paper,
+    color: TodoistColors.white,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+  deadlineBadgeText: {
+    color: '#B5B5B5',
     fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.9,
-  },
-  openPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  openPillText: {
-    color: Palette.inkFaint,
-    fontSize: 12,
     fontWeight: '500',
   },
-  title: {
-    color: Palette.paper,
-    fontSize: 21,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-    lineHeight: 26,
-  },
-  notes: {
-    color: Palette.inkFaint,
-    fontSize: 13,
-    marginTop: 4,
-  },
-  timerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    marginTop: 18,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#2A2925',
-  },
-  timerLabel: {
-    color: Palette.inkFaint,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.1,
-    marginBottom: 4,
-  },
-  timerDigits: {
-    color: Palette.white,
-    fontFamily: Fonts?.mono,
-    fontSize: 38,
-    fontWeight: '700',
-    letterSpacing: -1,
-    fontVariant: ['tabular-nums'],
-  },
-  deadlineBox: {
-    alignItems: 'flex-end',
-    backgroundColor: '#21201C',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#2E2C27',
-  },
-  deadlineLabel: {
-    color: Palette.inkFaint,
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.9,
-  },
-  deadlineValue: {
-    color: Palette.paper,
-    fontFamily: Fonts?.mono,
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  deadlineClock: {
-    color: Palette.inkFaint,
-    fontSize: 11,
-    marginTop: 1,
-  },
-  controlsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 18,
-  },
-  secondaryBtn: {
-    flex: 1,
+  mainRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 13,
-    borderRadius: 14,
-    backgroundColor: '#24231F',
-    borderWidth: 1,
-    borderColor: '#3A3832',
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  secondaryBtnText: {
-    color: Palette.paper,
+  title: {
+    color: '#E5E5E5',
     fontSize: 14,
     fontWeight: '600',
   },
-  completeBtn: {
-    flex: 1.6,
+  timerDigits: {
+    color: TodoistColors.white,
+    fontFamily: Fonts?.mono,
+    fontSize: 22,
+    fontWeight: '800',
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  actionsCluster: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    paddingVertical: 13,
-    borderRadius: 14,
-    backgroundColor: Palette.vermilion,
+    gap: 8,
   },
-  completeBtnText: {
-    color: Palette.white,
-    fontSize: 14,
+  iconCircleBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: TodoistColors.trackerCard,
+    borderWidth: 1,
+    borderColor: TodoistColors.trackerBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doneBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: TodoistColors.dateToday,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    borderRadius: 18,
+  },
+  doneBtnText: {
+    color: TodoistColors.white,
+    fontSize: 13,
     fontWeight: '700',
   },
 });

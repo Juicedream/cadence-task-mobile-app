@@ -5,7 +5,7 @@ import React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Palette } from '@/constants/theme';
+import { TodoistColors } from '@/constants/theme';
 
 export default function AppTabs() {
   const pathname = usePathname();
@@ -16,8 +16,11 @@ export default function AppTabs() {
     pathname.startsWith('/new-task') ||
     pathname.startsWith('/task/');
 
-  const isHome = pathname === '/' || pathname === '/index';
-  const isLedger = pathname.startsWith('/explore');
+  const isToday = pathname === '/' || pathname === '/index';
+  const isUpcoming = pathname.startsWith('/upcoming');
+  const isActivity = pathname.startsWith('/explore');
+
+  const todayNumber = new Date().getDate();
 
   return (
     <Tabs>
@@ -26,51 +29,86 @@ export default function AppTabs() {
         <TabList asChild>
           <View
             style={StyleSheet.flatten([
-              styles.tabBarWrapper,
-              { paddingBottom: Math.max(insets.bottom, 14) },
+              styles.bottomBar,
+              { paddingBottom: Math.max(insets.bottom, 10) },
             ])}
           >
-            <View style={styles.tabBarPill}>
-              <TabTrigger name="index" href="/" asChild>
-                <Pressable
-                  style={StyleSheet.flatten([
-                    styles.tabItem,
-                    isHome && styles.tabItemActive,
-                  ])}
-                >
+            {/* 1. Today Tab (with Todoist calendar date badge) */}
+            <TabTrigger name="index" href="/" asChild>
+              <Pressable style={styles.tabButton}>
+                <View style={styles.todayIconWrap}>
                   <Ionicons
-                    name={isHome ? 'calendar' : 'calendar-outline'}
-                    size={18}
-                    color={isHome ? Palette.white : Palette.inkMuted}
+                    name={isToday ? 'calendar' : 'calendar-clear-outline'}
+                    size={22}
+                    color={
+                      isToday ? TodoistColors.red : TodoistColors.textSecondary
+                    }
                   />
                   <Text
-                    style={[styles.tabLabel, isHome && styles.tabLabelActive]}
+                    style={[
+                      styles.todayBadgeNum,
+                      {
+                        color: isToday
+                          ? TodoistColors.white
+                          : TodoistColors.textSecondary,
+                      },
+                    ]}
                   >
-                    Schedule
+                    {todayNumber}
                   </Text>
-                </Pressable>
-              </TabTrigger>
+                </View>
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    isToday && styles.tabLabelActive,
+                  ]}
+                >
+                  Today
+                </Text>
+              </Pressable>
+            </TabTrigger>
 
-              <TabTrigger name="explore" href="/explore" asChild>
-                <Pressable
-                  style={StyleSheet.flatten([
-                    styles.tabItem,
-                    isLedger && styles.tabItemActive,
-                  ])}
+            {/* 2. Upcoming Tab (Tomorrow, Next Tomorrow & 14-day calendar) */}
+            <TabTrigger name="upcoming" href="/upcoming" asChild>
+              <Pressable style={styles.tabButton}>
+                <Ionicons
+                  name={isUpcoming ? 'calendar-number' : 'calendar-outline'}
+                  size={22}
+                  color={
+                    isUpcoming ? TodoistColors.red : TodoistColors.textSecondary
+                  }
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    isUpcoming && styles.tabLabelActive,
+                  ]}
                 >
-                  <Ionicons
-                    name={isLedger ? 'stats-chart' : 'stats-chart-outline'}
-                    size={18}
-                    color={isLedger ? Palette.white : Palette.inkMuted}
-                  />
-                  <Text
-                    style={[styles.tabLabel, isLedger && styles.tabLabelActive]}
-                  >
-                    SQLite Ledger
-                  </Text>
-                </Pressable>
-              </TabTrigger>
-            </View>
+                  Upcoming
+                </Text>
+              </Pressable>
+            </TabTrigger>
+
+            {/* 3. Activity & Records Tab */}
+            <TabTrigger name="explore" href="/explore" asChild>
+              <Pressable style={styles.tabButton}>
+                <Ionicons
+                  name={isActivity ? 'checkmark-done-circle' : 'checkmark-done-circle-outline'}
+                  size={23}
+                  color={
+                    isActivity ? TodoistColors.red : TodoistColors.textSecondary
+                  }
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    isActivity && styles.tabLabelActive,
+                  ]}
+                >
+                  Activity Log
+                </Text>
+              </Pressable>
+            </TabTrigger>
           </View>
         </TabList>
       ) : null}
@@ -79,52 +117,51 @@ export default function AppTabs() {
 }
 
 const styles = StyleSheet.create({
-  tabBarWrapper: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    pointerEvents: 'box-none',
-  },
-  tabBarPill: {
+  bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Palette.paperElevated,
-    borderRadius: 999,
-    padding: 5,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: Palette.border,
+    justifyContent: 'space-around',
+    backgroundColor: TodoistColors.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: TodoistColors.borderStrong,
+    paddingTop: 8,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.12,
-        shadowRadius: 16,
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 6,
       },
       android: {
-        elevation: 6,
+        elevation: 8,
       },
     }),
   },
-  tabItem: {
-    flexDirection: 'row',
+  tabButton: {
+    flex: 1,
     alignItems: 'center',
-    gap: 7,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 999,
+    justifyContent: 'center',
+    gap: 3,
   },
-  tabItemActive: {
-    backgroundColor: Palette.ink,
+  todayIconWrap: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todayBadgeNum: {
+    position: 'absolute',
+    top: 7,
+    fontSize: 8,
+    fontWeight: '800',
   },
   tabLabel: {
-    color: Palette.inkMuted,
-    fontSize: 13,
-    fontWeight: '700',
+    color: TodoistColors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
   },
   tabLabelActive: {
-    color: Palette.white,
+    color: TodoistColors.red,
+    fontWeight: '700',
   },
 });

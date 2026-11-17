@@ -21,6 +21,7 @@ import {
   getSettingAsync,
   getTaskByIdAsync,
   pauseTaskAsync,
+  rescheduleTaskAsync,
   resumeTaskAsync,
   setSettingAsync,
   startTaskNowAsync,
@@ -56,6 +57,11 @@ interface TasksContextValue {
   resetOnboarding: () => Promise<void>;
   refreshTasks: () => Promise<void>;
   addTask: (input: CreateTaskInput) => Promise<number>;
+  rescheduleTask: (
+    taskId: number,
+    scheduledStartAt: string,
+    deadlineAt: string | null
+  ) => Promise<void>;
   startTaskNow: (taskId: number) => Promise<void>;
   pauseTask: (taskId: number) => Promise<void>;
   resumeTask: (taskId: number) => Promise<void>;
@@ -72,7 +78,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean | null>(
     null
   );
-  const [userName, setUserName] = useState<string>('Operator');
+  const [userName, setUserName] = useState<string>('Alex');
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [inAppBanner, setInAppBanner] = useState<InAppBannerAlert | null>(null);
 
@@ -93,7 +99,6 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     setTasks(rows);
   }, [db]);
 
-  // Load initial settings and tasks from SQLite
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -112,7 +117,6 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     };
   }, [db]);
 
-  // Listen to incoming push notifications & notification taps
   useEffect(() => {
     if (Platform.OS === 'web') return;
 
@@ -124,7 +128,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       setInAppBanner({
         id: notification.request.identifier,
         taskId,
-        title: title ?? 'Task Cadence Alert',
+        title: title ?? 'Todoist Task Alert',
         body: body ?? 'Check your scheduled task.',
         stage,
       });
@@ -152,7 +156,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
 
   const completeOnboarding = useCallback(
     async (name: string) => {
-      const cleanName = name.trim() || 'Operator';
+      const cleanName = name.trim() || 'Alex';
       await setSettingAsync(db, 'user_name', cleanName);
       await setSettingAsync(db, 'onboarding_completed', 'true');
       setUserName(cleanName);
@@ -190,13 +194,40 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     [db, refreshTasks]
   );
 
+  const rescheduleTask = useCallback(
+    async (
+      taskId: number,
+      scheduledStartAt: string,
+      deadlineAt: string | null
+    ) => {
+      if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      }
+
+      const target = await getTaskByIdAsync(db, taskId);
+      if (!target) return;
+
+      await cancelAllTaskNotificationsAsync(target);
+      await rescheduleTaskAsync(db, taskId, scheduledStartAt, deadlineAt);
+
+      const notifIds = await scheduleTaskCadenceNotificationsAsync({
+        taskId,
+        title: target.title,
+        scheduledStartAt,
+        deadlineAt,
+      });
+      await updateTaskNotificationsAsync(db, taskId, notifIds);
+      await refreshTasks();
+    },
+    [db, refreshTasks]
+  );
+
   const startTaskNow = useCallback(
     async (taskId: number) => {
       if (Platform.OS !== 'web') {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => undefined);
       }
 
-      // Pause any other currently running task so the user has one focused active session
       const currentRows = await getAllTasksAsync(db);
       for (const row of currentRows) {
         if (row.id !== taskId && row.status === 'in_progress') {
@@ -231,7 +262,6 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       if (Platform.OS !== 'web') {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
       }
-      // Pause any other running task
       const currentRows = await getAllTasksAsync(db);
       for (const row of currentRows) {
         if (row.id !== taskId && row.status === 'in_progress') {
@@ -280,7 +310,6 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       }
       const sentNative = await sendInstantPreviewNotificationAsync(task, stage);
       if (!sentNative) {
-        // Fallback or web preview banner
         const labels = {
           '30m': {
             title: '30 Minutes Until Start',
@@ -328,6 +357,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       resetOnboarding,
       refreshTasks,
       addTask,
+      rescheduleTask,
       startTaskNow,
       pauseTask,
       resumeTask,
@@ -347,6 +377,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       resetOnboarding,
       refreshTasks,
       addTask,
+      rescheduleTask,
       startTaskNow,
       pauseTask,
       resumeTask,
